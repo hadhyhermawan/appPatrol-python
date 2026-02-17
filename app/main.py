@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
 from app.models.models import Users
-from app.routers import auth, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking
+from app.routers import auth, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission
 
 from fastapi.staticfiles import StaticFiles
 
@@ -32,6 +32,7 @@ app.include_router(izin_sakit.router)
 app.include_router(izin_cuti.router)
 app.include_router(izin_dinas.router)
 app.include_router(employee_tracking.router)
+app.include_router(role_permission.router)
 
 @app.get("/")
 def read_root():

@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from fastapi import File, UploadFile, Form
 from app.core.security import get_password_hash
+from app.core.permissions import CurrentUser, get_current_user, require_permission_dependency
 
 router = APIRouter(
     prefix="/api/master",
@@ -195,7 +196,10 @@ async def delete_departemen(kode_dept: str, db: Session = Depends(get_db)):
 # ==========================================
 
 @router.get("/jabatan", response_model=List[JabatanDTO])
-async def get_jabatan_list(db: Session = Depends(get_db)):
+async def get_jabatan_list(
+    current_user: CurrentUser = Depends(require_permission_dependency("jabatan.index")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Jabatan).order_by(Jabatan.kode_jabatan).all()
         return data
@@ -203,7 +207,11 @@ async def get_jabatan_list(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/jabatan", response_model=JabatanDTO)
-async def create_jabatan(request: JabatanCreateRequest, db: Session = Depends(get_db)):
+async def create_jabatan(
+    request: JabatanCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("jabatan.create")),
+    db: Session = Depends(get_db)
+):
     try:
         # Check if exists
         existing = db.query(Jabatan).filter(Jabatan.kode_jabatan == request.kode_jabatan).first()
@@ -228,7 +236,12 @@ async def create_jabatan(request: JabatanCreateRequest, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/jabatan/{kode_jabatan}", response_model=JabatanDTO)
-async def update_jabatan(kode_jabatan: str, request: JabatanCreateRequest, db: Session = Depends(get_db)):
+async def update_jabatan(
+    kode_jabatan: str,
+    request: JabatanCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("jabatan.update")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Jabatan).filter(Jabatan.kode_jabatan == kode_jabatan).first()
         if not data:
@@ -247,7 +260,11 @@ async def update_jabatan(kode_jabatan: str, request: JabatanCreateRequest, db: S
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/jabatan/{kode_jabatan}")
-async def delete_jabatan(kode_jabatan: str, db: Session = Depends(get_db)):
+async def delete_jabatan(
+    kode_jabatan: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("jabatan.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Jabatan).filter(Jabatan.kode_jabatan == kode_jabatan).first()
         if not data:
@@ -293,7 +310,10 @@ async def get_departemen_options(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/cabang", response_model=List[CabangDTO])
-async def get_cabang_list(db: Session = Depends(get_db)):
+async def get_cabang_list(
+    current_user: CurrentUser = Depends(require_permission_dependency("cabang.index")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cabang).order_by(Cabang.kode_cabang).all()
         return data
@@ -301,7 +321,11 @@ async def get_cabang_list(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cabang", response_model=CabangDTO)
-async def create_cabang(request: CabangCreateRequest, db: Session = Depends(get_db)):
+async def create_cabang(
+    request: CabangCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("cabang.create")),
+    db: Session = Depends(get_db)
+):
     try:
         # Check if exists
         existing = db.query(Cabang).filter(Cabang.kode_cabang == request.kode_cabang).first()
@@ -331,7 +355,12 @@ async def create_cabang(request: CabangCreateRequest, db: Session = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/cabang/{kode_cabang}", response_model=CabangDTO)
-async def update_cabang(kode_cabang: str, request: CabangCreateRequest, db: Session = Depends(get_db)):
+async def update_cabang(
+    kode_cabang: str,
+    request: CabangCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("cabang.update")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cabang).filter(Cabang.kode_cabang == kode_cabang).first()
         if not data:
@@ -355,7 +384,11 @@ async def update_cabang(kode_cabang: str, request: CabangCreateRequest, db: Sess
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/cabang/{kode_cabang}")
-async def delete_cabang(kode_cabang: str, db: Session = Depends(get_db)):
+async def delete_cabang(
+    kode_cabang: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("cabang.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cabang).filter(Cabang.kode_cabang == kode_cabang).first()
         if not data:
@@ -401,6 +434,7 @@ class PatrolPointCreateRequest(BaseModel):
 async def get_patrol_points(
     kode_cabang: Optional[str] = Query(None, description="Filter Kode Cabang"),
     search: Optional[str] = Query(None, description="Search Nama Titik"),
+    current_user: CurrentUser = Depends(require_permission_dependency("patrolpoint.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -416,7 +450,11 @@ async def get_patrol_points(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/patrol-points", response_model=PatrolPointDTO)
-async def create_patrol_point(request: PatrolPointCreateRequest, db: Session = Depends(get_db)):
+async def create_patrol_point(
+    request: PatrolPointCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("patrolpoint.create")),
+    db: Session = Depends(get_db)
+):
     try:
         new_point = PatrolPointMaster(
             kode_cabang=request.kode_cabang,
@@ -438,7 +476,12 @@ async def create_patrol_point(request: PatrolPointCreateRequest, db: Session = D
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/patrol-points/{id}", response_model=PatrolPointDTO)
-async def update_patrol_point(id: int, request: PatrolPointCreateRequest, db: Session = Depends(get_db)):
+async def update_patrol_point(
+    id: int,
+    request: PatrolPointCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("patrolpoint.update")),
+    db: Session = Depends(get_db)
+):
     try:
         point = db.query(PatrolPointMaster).filter(PatrolPointMaster.id == id).first()
         if not point:
@@ -461,7 +504,11 @@ async def update_patrol_point(id: int, request: PatrolPointCreateRequest, db: Se
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/patrol-points/{id}")
-async def delete_patrol_point(id: int, db: Session = Depends(get_db)):
+async def delete_patrol_point(
+    id: int,
+    current_user: CurrentUser = Depends(require_permission_dependency("patrolpoint.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         point = db.query(PatrolPointMaster).filter(PatrolPointMaster.id == id).first()
         if not point:
@@ -496,7 +543,10 @@ class CutiCreateRequest(BaseModel):
     jumlah_hari: int
 
 @router.get("/cuti", response_model=List[CutiDTO])
-async def get_cuti_list(db: Session = Depends(get_db)):
+async def get_cuti_list(
+    current_user: CurrentUser = Depends(require_permission_dependency("cuti.index")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cuti).order_by(Cuti.kode_cuti).all()
         return data
@@ -504,7 +554,11 @@ async def get_cuti_list(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cuti", response_model=CutiDTO)
-async def create_cuti(request: CutiCreateRequest, db: Session = Depends(get_db)):
+async def create_cuti(
+    request: CutiCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("cuti.create")),
+    db: Session = Depends(get_db)
+):
     try:
         existing = db.query(Cuti).filter(Cuti.kode_cuti == request.kode_cuti).first()
         if existing:
@@ -529,7 +583,12 @@ async def create_cuti(request: CutiCreateRequest, db: Session = Depends(get_db))
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/cuti/{kode_cuti}", response_model=CutiDTO)
-async def update_cuti(kode_cuti: str, request: CutiCreateRequest, db: Session = Depends(get_db)):
+async def update_cuti(
+    kode_cuti: str,
+    request: CutiCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("cuti.update")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cuti).filter(Cuti.kode_cuti == kode_cuti).first()
         if not data:
@@ -549,7 +608,11 @@ async def update_cuti(kode_cuti: str, request: CutiCreateRequest, db: Session = 
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/cuti/{kode_cuti}")
-async def delete_cuti(kode_cuti: str, db: Session = Depends(get_db)):
+async def delete_cuti(
+    kode_cuti: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("cuti.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(Cuti).filter(Cuti.kode_cuti == kode_cuti).first()
         if not data:
@@ -612,7 +675,10 @@ class JamKerjaCreateRequest(BaseModel):
         return v
 
 @router.get("/jamkerja", response_model=List[JamKerjaDTO])
-async def get_jamkerja_list(db: Session = Depends(get_db)):
+async def get_jamkerja_list(
+    current_user: CurrentUser = Depends(require_permission_dependency("jamkerja.index")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(PresensiJamkerja).order_by(PresensiJamkerja.kode_jam_kerja).all()
         return data
@@ -620,7 +686,11 @@ async def get_jamkerja_list(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/jamkerja", response_model=JamKerjaDTO)
-async def create_jamkerja(request: JamKerjaCreateRequest, db: Session = Depends(get_db)):
+async def create_jamkerja(
+    request: JamKerjaCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("jamkerja.create")),
+    db: Session = Depends(get_db)
+):
     try:
         existing = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == request.kode_jam_kerja).first()
         if existing:
@@ -669,7 +739,12 @@ async def create_jamkerja(request: JamKerjaCreateRequest, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/jamkerja/{kode}", response_model=JamKerjaDTO)
-async def update_jamkerja(kode: str, request: JamKerjaCreateRequest, db: Session = Depends(get_db)):
+async def update_jamkerja(
+    kode: str,
+    request: JamKerjaCreateRequest,
+    current_user: CurrentUser = Depends(require_permission_dependency("jamkerja.update")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == kode).first()
         if not data:
@@ -717,7 +792,11 @@ async def update_jamkerja(kode: str, request: JamKerjaCreateRequest, db: Session
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/jamkerja/{kode}")
-async def delete_jamkerja(kode: str, db: Session = Depends(get_db)):
+async def delete_jamkerja(
+    kode: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("jamkerja.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == kode).first()
         if not data:
@@ -1010,6 +1089,7 @@ async def get_karyawan_list(
     dept_code: Optional[str] = None,
     cabang_code: Optional[str] = None,
     masa_anggota: Optional[str] = Query(None, description="aktif, expiring, expired"),
+    current_user: CurrentUser = Depends(require_permission_dependency("karyawan.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1212,6 +1292,7 @@ async def create_karyawan(
     foto_ijazah: UploadFile = File(None),
     foto_sim: UploadFile = File(None),
     
+    current_user: CurrentUser = Depends(require_permission_dependency("karyawan.create")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1325,6 +1406,7 @@ async def update_karyawan(
     foto_ijazah: UploadFile = File(None),
     foto_sim: UploadFile = File(None),
     
+    current_user: CurrentUser = Depends(require_permission_dependency("karyawan.update")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1404,7 +1486,11 @@ async def update_karyawan(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/karyawan/{nik}")
-async def delete_karyawan(nik: str, db: Session = Depends(get_db)):
+async def delete_karyawan(
+    nik: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("karyawan.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
         if not karyawan:

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 import sys
 import traceback
+from app.core.permissions import CurrentUser, get_current_user, require_permission_dependency
 
 router = APIRouter(
     prefix="/api/utilities",
@@ -33,6 +34,7 @@ class UserDTO(BaseModel):
 async def get_users(
     search: Optional[str] = Query(None, description="Search by Name/Email"),
     limit: Optional[int] = Query(100),
+    current_user: CurrentUser = Depends(require_permission_dependency("users.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -85,6 +87,7 @@ class RoleDTO(BaseModel):
 @router.get("/roles", response_model=List[RoleDTO])
 async def get_roles(
     name: Optional[str] = Query(None, description="Filter by Role Name"),
+    current_user: CurrentUser = Depends(require_permission_dependency("roles.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -118,7 +121,10 @@ class PermissionDTO(BaseModel):
         from_attributes = True
 
 @router.get("/permission-groups", response_model=List[PermissionGroupDTO])
-async def get_permission_groups(db: Session = Depends(get_db)):
+async def get_permission_groups(
+    current_user: CurrentUser = Depends(require_permission_dependency("permissiongroups.index")),
+    db: Session = Depends(get_db)
+):
     try:
         data = db.query(PermissionGroups).order_by(PermissionGroups.id).all()
         return data
@@ -127,7 +133,8 @@ async def get_permission_groups(db: Session = Depends(get_db)):
 
 @router.post("/permission-groups", response_model=PermissionGroupDTO)
 async def create_permission_group(
-    payload: PermissionGroupDTO, # Re-using DTO for simplicity as it only has name, id is ignored on input usually but let's be strict if needed
+    payload: PermissionGroupDTO,
+    current_user: CurrentUser = Depends(require_permission_dependency("permissiongroups.create")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -144,6 +151,7 @@ async def create_permission_group(
 async def update_permission_group(
     id: int,
     payload: PermissionGroupDTO,
+    current_user: CurrentUser = Depends(require_permission_dependency("permissiongroups.update")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -164,6 +172,7 @@ async def update_permission_group(
 @router.delete("/permission-groups/{id}")
 async def delete_permission_group(
     id: int,
+    current_user: CurrentUser = Depends(require_permission_dependency("permissiongroups.delete")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -183,6 +192,7 @@ async def delete_permission_group(
 @router.get("/permissions", response_model=List[PermissionDTO])
 async def get_permissions(
     id_permission_group: Optional[int] = Query(None, description="Filter by Permission Group ID"),
+    current_user: CurrentUser = Depends(require_permission_dependency("permissions.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -210,6 +220,7 @@ class CreatePermissionDTO(BaseModel):
 @router.post("/permissions", response_model=PermissionDTO)
 async def create_permission(
     payload: CreatePermissionDTO,
+    current_user: CurrentUser = Depends(require_permission_dependency("permissions.create")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -376,6 +387,7 @@ async def get_logs(
     to_date: Optional[str] = Query(None, alias="to"),
     kode_cabang: Optional[str] = Query(None),
     limit: int = 100,
+    current_user: CurrentUser = Depends(require_permission_dependency("logs.index")),
     db: Session = Depends(get_db)
 ):
     try:
@@ -425,7 +437,11 @@ async def get_logs(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/logs/{id}")
-async def delete_log(id: int, db: Session = Depends(get_db)):
+async def delete_log(
+    id: int,
+    current_user: CurrentUser = Depends(require_permission_dependency("logs.delete")),
+    db: Session = Depends(get_db)
+):
     try:
         log = db.query(LoginLogs).filter(LoginLogs.id == id).first()
         if not log:

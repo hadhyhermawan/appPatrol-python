@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
@@ -128,6 +128,86 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
     except Exception as e:
         # Log to server console/file but hide details from client
         print(f"ERROR LOGIN: {str(e)}") 
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Server Error"
+        )
+
+@router.get("/auth/me")
+async def get_current_user(
+    db: Session = Depends(get_db), 
+    authorization: Optional[str] = Header(None)
+):
+    """Get current user's information including roles and permissions"""
+    try:
+        # Extract token from Authorization header
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+        
+        token = authorization.replace("Bearer ", "")
+        
+        # Decode token
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = int(payload.get("sub"))
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+        
+        # Get user
+        user = db.query(Users).filter(Users.id == user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Get user's roles
+        roles_result = db.execute(
+            text("""
+                SELECT r.id, r.name, r.guard_name
+                FROM model_has_roles mhr
+                JOIN roles r ON mhr.role_id = r.id
+                WHERE mhr.model_id = :user_id 
+                AND mhr.model_type = 'App\\\\Models\\\\User'
+            """),
+            {"user_id": user.id}
+        ).fetchall()
+        
+        roles = [{"id": row[0], "name": row[1], "guard_name": row[2]} for row in roles_result]
+        
+        # Get user's permissions (through roles)
+        permissions_result = db.execute(
+            text("""
+                SELECT DISTINCT p.id, p.name, p.guard_name
+                FROM model_has_roles mhr
+                JOIN role_has_permissions rhp ON mhr.role_id = rhp.role_id
+                JOIN permissions p ON rhp.permission_id = p.id
+                WHERE mhr.model_id = :user_id 
+                AND mhr.model_type = 'App\\\\Models\\\\User'
+                ORDER BY p.name
+            """),
+            {"user_id": user.id}
+        ).fetchall()
+        
+        permissions = [{"id": row[0], "name": row[1], "guard_name": row[2]} for row in permissions_result]
+        
+        return {
+            "id": user.id,
+            "username": user.username,
+            "roles": roles,
+            "permissions": permissions
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"ERROR GET CURRENT USER: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail="Internal Server Error"
