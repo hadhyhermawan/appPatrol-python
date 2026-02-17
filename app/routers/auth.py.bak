@@ -1,0 +1,118 @@
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy.orm import Session
+from app.database import get_db
+from app.schemas.auth import LoginRequest, LoginResponse, UserData
+from app.models.models import Users, LoginLogs, PengaturanUmum
+from typing import Optional
+from app.core.security import verify_password
+from jose import jwt
+from app.core.security import SECRET_KEY, ALGORITHM
+from datetime import datetime, timedelta
+
+# Create token function
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=60 * 24 * 30) # 30 days
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+router = APIRouter(
+    prefix="/api",
+    tags=["Auth"]
+)
+
+@router.post("/login", response_model=LoginResponse)
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    # 1. Cari user
+    user = db.query(Users).filter(Users.username == request.username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Login gagal, username atau password salah",
+        )
+    
+    # 2. Verify Password (check bcrypt hash)
+    # Laravel hashes start with $2y$ usually. passlib handles this.
+    if not verify_password(request.password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Login gagal, username atau password salah",
+        )
+    
+    # 3. Handle device login logic (simplified for initial port)
+    # In Laravel: check multi-device, revoke old tokens, etc.
+    # We will implement full logic later.
+    
+    # 4. Create Token (JWT for now to keep it simple and stateless)
+    # We'll use id_user as sub claim
+    access_token = create_access_token(data={"sub": str(user.id), "username": user.username})
+    
+    # 5. Log Login
+    log = LoginLogs(
+        user_id=user.id,
+        ip="127.0.0.1", # TODO: Get real IP
+        device=request.device_model or "Unknown",
+        android_version=request.android_version,
+        login_at=datetime.utcnow()
+    )
+    db.add(log)
+    db.commit()
+    
+    # 6. Get settings
+    settings = db.query(PengaturanUmum).first()
+    face_fail_limit = settings.face_check_liveness_limit if settings else 3
+
+    # 7. Get Karyawan data (This part needs complex joins or raw query because models.py relationship names are auto-generated and might be tricky)
+    # Let's use raw SQL for speed and accuracy since we know the table structure well
+    # Or use SQLAlchemy if relationship is clear.
+    # In models.py: t_users_karyawan links users to karyawan NIK.
+    # user.nik seems to NOT exist directly on Users model in models.py, it's via secondary table.
+    
+    # Let's try to query UsersKaryawan manually
+    # Note: models.py generated t_users_karyawan as a Table object, not a Class, because it has no primary key? 
+    # Or maybe it's just an association table.
+    # Let's check models.py again for t_users_karyawan usage.
+    
+    # Query t_users_karyawan to get NIK
+    # Since it is a Table object, we query it using database query
+    result = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user.id}).fetchone()
+    nik = result[0] if result else None
+    
+    nama_karyawan = None
+    if nik:
+        # Get nama karyawan
+        karyawan_res = db.execute(text("SELECT nama_karyawan FROM karyawan WHERE nik = :nik"), {"nik": nik}).fetchone()
+        nama_karyawan = karyawan_res[0] if karyawan_res else None
+
+    # 8. Last Logins
+    last_logins = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.login_at.desc()).limit(5).all()
+    # Format logins
+    formatted_logins = []
+    for l in last_logins:
+        formatted_logins.append({
+            "ip": l.ip, 
+            "device": l.device, 
+            "login_at": l.login_at.strftime("%Y-%m-%d %H:%M:%S") if l.login_at else None
+        })
+
+    # 9. WS URL
+    ws_url = f"wss://k3guard.com/wss/?token={access_token}"
+
+    return LoginResponse(
+        message="Login berhasil",
+        token=access_token,
+        ws_url=ws_url,
+        data=UserData(
+            id_user=user.id,
+            username=user.username,
+            nik=nik,
+            nama_karyawan=nama_karyawan,
+            last_logins=formatted_logins,
+            face_fail_limit=face_fail_limit
+        ),
+        walkie={} # Empty for now
+    )

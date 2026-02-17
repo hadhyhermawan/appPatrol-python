@@ -1,0 +1,68 @@
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from sqlalchemy import func, desc, text
+from app.database import get_db
+from app.models.models import Users, ModelHasRoles, Roles, Karyawan
+from typing import List, Optional
+from pydantic import BaseModel
+from datetime import datetime
+
+router = APIRouter(
+    prefix="/utilities",
+    tags=["Utilities"]
+)
+
+# ==========================================
+# USER MANAGEMENT
+# ==========================================
+
+class UserDTO(BaseModel):
+    id: int
+    name: str
+    username: str
+    email: str
+    role: Optional[str] = None
+    created_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+@router.get("/users", response_model=List[UserDTO])
+async def get_users(
+    search: Optional[str] = Query(None, description="Search by Name/Email"),
+    limit: Optional[int] = Query(100),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Query Users with Roles
+        query = db.query(Users)
+        
+        if search:
+            query = query.filter(
+                (Users.name.like(f"%{search}%")) |
+                (Users.email.like(f"%{search}%")) |
+                (Users.username.like(f"%{search}%"))
+            )
+            
+        data = query.order_by(desc(Users.created_at)).limit(limit).all()
+        
+        result = []
+        for user in data:
+            dto = UserDTO.model_validate(user)
+            
+            # Fetch Role manually
+            # model_has_roles: model_id = user.id, model_type = 'App\Models\User' usually
+            role_link = db.query(ModelHasRoles).filter(
+                ModelHasRoles.model_id == user.id
+            ).first()
+            
+            if role_link:
+                role = db.query(Roles).filter(Roles.id == role_link.role_id).first()
+                if role:
+                    dto.role = role.name
+                    
+            result.append(dto)
+            
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
