@@ -9,6 +9,7 @@ from datetime import datetime
 import shutil
 import os
 import uuid
+from app.routers.master import get_full_image_url
 
 router = APIRouter(
     prefix="/api/berita",
@@ -71,7 +72,7 @@ async def get_berita_list(
                 id=row.id,
                 judul=row.judul,
                 isi=row.isi,
-                foto=row.foto,
+                foto=get_full_image_url(row.foto, "storage/uploads/berita") if row.foto else None,
                 kode_dept_target=row.kode_dept_target,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
