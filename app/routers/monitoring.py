@@ -6,6 +6,7 @@ from app.models.models import Presensi, Karyawan, Departemen, PresensiJamkerja
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import date, datetime
+from app.routers.master import get_full_image_url
 
 router = APIRouter(
     prefix="/api/monitoring",
@@ -100,8 +101,8 @@ async def get_monitoring_presensi(
                 nama_jam_kerja=row.nama_jam_kerja or "-",
                 jam_in=jin,
                 jam_out=jout,
-                foto_in=row.foto_in,
-                foto_out=row.foto_out,
+                foto_in=get_full_image_url(row.foto_in, "storage/uploads/absensi") if row.foto_in else None,
+                foto_out=get_full_image_url(row.foto_out, "storage/uploads/absensi") if row.foto_out else None,
                 lokasi_in=row.lokasi_in,
                 lokasi_out=row.lokasi_out,
                 status_kehadiran=row.status
