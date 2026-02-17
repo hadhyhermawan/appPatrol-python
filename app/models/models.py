@@ -793,6 +793,8 @@ class Users(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[Optional[str]] = mapped_column(String(20))
+    address: Mapped[Optional[str]] = mapped_column(Text)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     foto: Mapped[Optional[str]] = mapped_column(String(255))
     email_verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)

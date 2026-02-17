@@ -222,20 +222,12 @@ from pathlib import Path
 
 @router.get("/auth/profile")
 async def get_profile(
-    authorization: Optional[str] = Header(None),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get current user profile"""
     try:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        token = authorization.replace("Bearer ", "")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = current_user["id"]
         
         # Get user data
         user = db.query(Users).filter(Users.id == user_id).first()
@@ -273,10 +265,10 @@ async def get_profile(
         
         # Construct photo URL if exists
         photo_url = None
-        if user.photo:
+        if user.foto:
             from os import getenv
             base_url = getenv("BASE_URL", "https://k3guard.com")
-            photo_url = f"{base_url}/storage/users/{user.photo}"
+            photo_url = f"{base_url}/storage/users/{user.foto}"
         
         return {
             "status": True,
@@ -308,20 +300,12 @@ async def update_profile(
     phone: Optional[str] = Form(None),
     address: Optional[str] = Form(None),
     photo: Optional[UploadFile] = File(None),
-    authorization: Optional[str] = Header(None),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update current user profile"""
     try:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        token = authorization.replace("Bearer ", "")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = current_user["id"]
         
         # Get user
         user = db.query(Users).filter(Users.id == user_id).first()
@@ -350,7 +334,7 @@ async def update_profile(
                 shutil.copyfileobj(photo.file, buffer)
             
             # Update user photo field
-            user.photo = filename
+            user.foto = filename
         
         db.commit()
         db.refresh(user)
@@ -385,10 +369,10 @@ async def update_profile(
         
         # Construct photo URL
         photo_url = None
-        if user.photo:
+        if user.foto:
             from os import getenv
             base_url = getenv("BASE_URL", "https://k3guard.com")
-            photo_url = f"{base_url}/storage/users/{user.photo}"
+            photo_url = f"{base_url}/storage/users/{user.foto}"
         
         return {
             "status": True,
@@ -419,20 +403,12 @@ async def update_profile(
 async def change_password(
     current_password: str = Form(...),
     new_password: str = Form(...),
-    authorization: Optional[str] = Header(None),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Change user password"""
     try:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        token = authorization.replace("Bearer ", "")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        user_id = current_user["id"]
         
         # Get user
         user = db.query(Users).filter(Users.id == user_id).first()
