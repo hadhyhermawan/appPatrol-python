@@ -22,15 +22,18 @@ router = APIRouter(
 # Get BASE_URL from environment
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
-def get_full_image_url(path: Optional[str]) -> Optional[str]:
+def get_full_image_url(path: Optional[str], folder: str = "storage/karyawan") -> Optional[str]:
     """Convert relative image path to full URL"""
     if not path:
         return None
     # If already a full URL, return as is
     if path.startswith(('http://', 'https://')):
         return path
-    # Prepend BASE_URL
-    return f"{BASE_URL}/{path}"
+    # If path already starts with storage/, use as is
+    if path.startswith('storage/'):
+        return f"{BASE_URL}/{path}"
+    # Otherwise, prepend folder path
+    return f"{BASE_URL}/{folder}/{path}"
 
 class KaryawanDTO(BaseModel):
     nik: str
