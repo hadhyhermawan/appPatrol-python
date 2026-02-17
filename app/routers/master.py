@@ -19,6 +19,19 @@ router = APIRouter(
     tags=["Master Data"]
 )
 
+# Get BASE_URL from environment
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+
+def get_full_image_url(path: Optional[str]) -> Optional[str]:
+    """Convert relative image path to full URL"""
+    if not path:
+        return None
+    # If already a full URL, return as is
+    if path.startswith(('http://', 'https://')):
+        return path
+    # Prepend BASE_URL
+    return f"{BASE_URL}/{path}"
+
 class KaryawanDTO(BaseModel):
     nik: str
     nama_karyawan: str
@@ -1174,7 +1187,7 @@ async def get_karyawan_list(
                 nik=row.nik,
                 nama_karyawan=row.nama_karyawan,
                 no_hp=row.no_hp,
-                foto=row.foto,
+                foto=get_full_image_url(row.foto),
                 status_aktif_karyawan=row.status_aktif_karyawan,
                 nama_dept=row.nama_dept or "-",
                 nama_jabatan=row.nama_jabatan or "-",
@@ -1196,9 +1209,9 @@ async def get_karyawan_list(
                 lock_device_login=row.lock_device_login,
                 allow_multi_device=row.allow_multi_device,
                 pin=row.pin,
-                foto_ktp=row.foto_ktp,
-                foto_kartu_anggota=row.foto_kartu_anggota,
-                foto_ijazah=row.foto_ijazah,
+                foto_ktp=get_full_image_url(row.foto_ktp),
+                foto_kartu_anggota=get_full_image_url(row.foto_kartu_anggota),
+                foto_ijazah=get_full_image_url(row.foto_ijazah),
                 no_sim=row.no_sim,
                 kode_jadwal=row.kode_jadwal,
 
