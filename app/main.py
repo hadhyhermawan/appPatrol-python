@@ -30,6 +30,12 @@ async def log_requests(request: Request, call_next):
 app_fastapi.mount("/storage", StaticFiles(directory="/var/www/appPatrol/storage/app/public"), name="storage")
 app_fastapi.mount("/api/storage", StaticFiles(directory="/var/www/appPatrol/storage/app/public"), name="api_storage")
 
+# Mount Local Static (Python Only Storage)
+import os
+os.makedirs("/var/www/appPatrol-python/static/chat", exist_ok=True)
+app_fastapi.mount("/static", StaticFiles(directory="/var/www/appPatrol-python/static"), name="static")
+app_fastapi.mount("/api/static", StaticFiles(directory="/var/www/appPatrol-python/static"), name="api_static")
+
 # Include Routers
 app_fastapi.include_router(auth.router)
 app_fastapi.include_router(auth_legacy.router) # Android Migration Endpoint
@@ -96,7 +102,10 @@ app_fastapi.include_router(violations.router) # Security Violations
 
 from app.routers import walkie_legacy
 app_fastapi.include_router(walkie_legacy.router) # Android Migration Walkie Channels
+app_fastapi.include_router(walkie_legacy.router_node) # Node Backend Internal Endpoints
 
+from app.routers import obrolan_legacy
+app_fastapi.include_router(obrolan_legacy.router) # Android Chat Legacy
 @app_fastapi.get("/")
 @app_fastapi.get("/api/")
 def read_root():

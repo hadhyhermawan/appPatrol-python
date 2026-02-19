@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 import datetime
 from jose import jwt
 from app.database import get_db
-from app.models.models import Users, Karyawan, LoginLogs, PengaturanUmum
+from app.models.models import Users, Karyawan, LoginLogs, PengaturanUmum, WalkieChannels, WalkieChannelCabangs
 from app.core.security import verify_password, get_password_hash # Pakai util security yg sdh ada
 from app.core.security import SECRET_KEY, ALGORITHM # Pakai config yg sdh ada
 
@@ -58,6 +58,28 @@ def create_android_token(data: dict):
     to_encode.update({"exp": expire, "iat": datetime.datetime.utcnow(), "scope": "android"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def get_allowed_channels_helper(db: Session, nik: str):
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+    if not karyawan: return []
+    kode_cabang = karyawan.kode_cabang
+    kode_dept = karyawan.kode_dept
+    channels = db.query(WalkieChannels).filter(WalkieChannels.active == 1).all()
+    allowed = []
+    for c in channels:
+        if c.dept_members:
+            depts = [d.strip() for d in c.dept_members.split(',')]
+            if kode_dept not in depts: continue
+        
+        channel_cabangs = db.query(WalkieChannelCabangs).filter(WalkieChannelCabangs.walkie_channel_id == c.id).all()
+        allowed_cabangs = [cc.kode_cabang for cc in channel_cabangs]
+        
+        if allowed_cabangs and kode_cabang not in allowed_cabangs: continue
+            
+        allowed.append(c)
+    
+    allowed.sort(key=lambda x: (x.priority, x.name))
+    return sorted(allowed, key=lambda x: x.priority, reverse=True)
 
 # --- ENDPOINTS ---
 
@@ -159,6 +181,35 @@ async def login_android(
     last_logins = []
     
     # 9. Return Response
+    walkie_channels_list = []
+    default_channel_obj = None
+    
+    if nik:
+        try:
+            allowed = get_allowed_channels_helper(db, nik)
+            for c in allowed:
+                c_data = {
+                    "id": c.id,
+                    "code": c.code,
+                    "name": c.name,
+                    "active": c.active,
+                    "auto_join": c.auto_join,
+                    "is_default": 1 if c.auto_join == 1 else 0
+                }
+                walkie_channels_list.append(c_data)
+            
+            # Default logic
+            for c in walkie_channels_list:
+                if c['auto_join'] == 1:
+                    default_channel_obj = c
+                    break
+            
+            if not default_channel_obj and walkie_channels_list:
+                default_channel_obj = walkie_channels_list[0]
+                
+        except Exception as e:
+            print(f"Error getting walkie channels: {e}", flush=True)
+
     return AndroidLoginResponse(
         message="Login Berhasil",
         token=access_token,
@@ -172,7 +223,8 @@ async def login_android(
             face_fail_limit=face_fail_limit
         ),
         walkie=WalkieInfoAndroid(
-            channels=[],
+            channels=walkie_channels_list,
+            default_channel=default_channel_obj,
             ws_base=ws_url
         )
     )
