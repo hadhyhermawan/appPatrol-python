@@ -7,10 +7,12 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import date, datetime
 from app.routers.master import get_full_image_url
+from app.core.permissions import get_current_user
 
 router = APIRouter(
     prefix="/api/monitoring",
-    tags=["Monitoring"]
+    tags=["Monitoring"],
+    dependencies=[Depends(get_current_user)]
 )
 
 class PresensiItem(BaseModel):

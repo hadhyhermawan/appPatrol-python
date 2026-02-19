@@ -72,7 +72,7 @@ Backend ini dibangun sebagai *Extension* untuk fitur-fitur yang membutuhkan perf
 **Framework**: FastAPI (Python)
 
 **Struktur:**
-*   `app/models/models.py`: Replikasi struktur tabel Laravel menggunakan SQLAlchemy agar Python bisa membaca/tulis ke database yang sama.
+*   `app/models/models.py`: Replikasi struktur tabel Laravel menggunakan SQLAlchemy. Menggunakan strategi **Cascade Delete** (`cascade="all, delete-orphan"`) pada relasi parent-child (misal: Sesi Patroli -> Titik Patroli) untuk menjaga integritas data saat penghapusan.
 *   `app/routers/`: Endpoint API baru.
     *   `master.py`: Endpoint canggih untuk tabel Karyawan (Filter lengkap, Pagination cepat).
     *   `monitoring.py`: Endpoint untuk Dashboard Real-time.
@@ -121,12 +121,24 @@ Antarmuka Admin baru yang dibangun menggunakan **TailAdmin Free Next.js Admin Da
 Pastikan service MySQL dan Web Server (Apache/Nginx) untuk Laravel sudah berjalan normal.
 
 ### 2. Backend Python (API Service)
+**Menjalankan Manual:**
 ```bash
 cd /var/www/appPatrol-python
 source .venv/bin/activate
-python3 app/main.py
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 *   Server: `http://localhost:8000`
+
+**Restart Service (Jika terjadi update kode):**
+Karena tidak ada service systemd standar, gunakan perintah berikut untuk mematikan proses lama dan menjalankannya kembali:
+```bash
+# Matikan proses uvicorn yang sedang berjalan
+pkill -f "uvicorn app.main:app"
+
+# Jalankan kembali di background (nohup)
+cd /var/www/appPatrol-python
+nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 > backend.log 2>&1 &
+```
 
 ### 3. Frontend Next.js (Admin UI)
 ```bash

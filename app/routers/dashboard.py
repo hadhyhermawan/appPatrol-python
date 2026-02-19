@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, case, and_, or_
 from app.database import get_db
-from app.models.models import Presensi, Karyawan, Cabang, PatrolSessions, Departemen
+from app.models.models import Presensi, Karyawan, Cabang, PatrolSessions, Departemen, Tamu, BarangMasuk, BarangKeluar, EmployeeLocations, EmployeeStatus
 from datetime import date, timedelta, datetime
+from app.core.permissions import get_current_user
 
 router = APIRouter(
     prefix="/api/dashboard",
     tags=["Dashboard"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 
@@ -141,7 +143,29 @@ async def get_dashboard_stats(
             or_(Presensi.jam_in.is_(None), Presensi.status.in_(['i', 's', 'c', 'a']))
         )\
         .limit(5)\
+        .limit(5)\
         .all()
+        
+    # Tamu Hari Ini
+    tamu_query = db.query(func.count(Tamu.id_tamu))\
+        .filter(func.date(Tamu.jam_masuk) == target_date)
+        
+    # Barang Hari Ini (Masuk + Keluar)
+    # Note: BarangMasuk & BarangKeluar are separate tables.
+    barang_masuk_count = db.query(func.count(BarangMasuk.id_barang_masuk))\
+        .filter(func.date(BarangMasuk.tgl_jam_masuk) == target_date).scalar() or 0
+        
+    barang_keluar_count = db.query(func.count(BarangKeluar.id_barang_keluar))\
+        .filter(func.date(BarangKeluar.tgl_jam_keluar) == target_date).scalar() or 0
+        
+    barang_count = barang_masuk_count + barang_keluar_count
+    
+    # Filter Tamu by Cabang if needed (join via nik_satpam -> karyawan -> cabang)
+    if kode_cabang:
+        tamu_query = tamu_query.join(Karyawan, Tamu.nik_satpam == Karyawan.nik)\
+            .filter(Karyawan.kode_cabang == kode_cabang)
+            
+    tamu_count = tamu_query.scalar() or 0
     
     return {
         "stats": {
@@ -170,8 +194,8 @@ async def get_dashboard_stats(
                 "changePercent": 1.9
             },
             "presensi_open": presensi_open_count,
-            "tamu_hari_ini": 0,  # TODO: implement tamu count
-            "barang_hari_ini": 0  # TODO: implement barang count
+            "tamu_hari_ini": tamu_count,
+            "barang_hari_ini": barang_count
         },
         "top_cabang": [
             {
@@ -214,3 +238,71 @@ async def get_dashboard_stats(
         ],
         "tanggal": target_date.isoformat()
     }
+
+
+@router.get("/map")
+async def get_map_monitoring(
+    kode_cabang: str = None,
+    kode_dept: str = None,
+    db: Session = Depends(get_db)
+):
+    # Get Last Known Location of Employees (Active only?)
+    # Join EmployeeLocations with Karyawan and EmployeeStatus
+    
+    query = db.query(
+        Karyawan.nik,
+        Karyawan.nama_karyawan,
+        Karyawan.kode_cabang,
+        Karyawan.kode_dept,
+        EmployeeLocations.latitude,
+        EmployeeLocations.longitude,
+        EmployeeLocations.updated_at,
+        EmployeeStatus.is_online,
+        EmployeeStatus.battery_level,
+        EmployeeStatus.last_seen,
+        Cabang.nama_cabang
+    )\
+        .join(EmployeeLocations, Karyawan.nik == EmployeeLocations.nik)\
+        .outerjoin(EmployeeStatus, Karyawan.nik == EmployeeStatus.nik)\
+        .outerjoin(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+        .filter(Karyawan.status_aktif_karyawan == '1')
+        
+    if kode_cabang:
+        query = query.filter(Karyawan.kode_cabang == kode_cabang)
+        
+    if kode_dept:
+        query = query.filter(Karyawan.kode_dept == kode_dept)
+        
+    # Only show recent locations (e.g. last 24 hours)?
+    # Or show all. Let frontend decide.
+    # Usually show only if updated_at > today - 1 day
+    yesterday_Limit = datetime.now() - timedelta(days=1)
+    query = query.filter(EmployeeLocations.updated_at >= yesterday_Limit)
+    
+    locations = query.all()
+    
+    data = []
+    for loc in locations:
+        # Determine status color/icon based on last_seen
+        # If last_seen < 15 mins ago -> Online (Green)
+        # Else -> Offline (Gray)
+        is_online = False
+        if loc.last_seen:
+             diff = datetime.now() - loc.last_seen
+             if diff.total_seconds() < 900: # 15 mins
+                 is_online = True
+                 
+        data.append({
+            "nik": loc.nik,
+            "nama": loc.nama_karyawan,
+            "cabang": loc.nama_cabang,
+            "dept": loc.kode_dept,
+            "lat": float(loc.latitude) if loc.latitude else 0,
+            "lng": float(loc.longitude) if loc.longitude else 0,
+            "updated_at": str(loc.updated_at),
+            "battery": loc.battery_level or 0,
+            "status": "online" if is_online else "offline",
+            "last_seen": str(loc.last_seen)
+        })
+        
+    return {"status": True, "data": data}

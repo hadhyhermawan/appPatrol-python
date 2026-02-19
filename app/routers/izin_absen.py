@@ -6,10 +6,12 @@ from app.models.models import PresensiIzinabsen, Karyawan, Jabatan, Departemen, 
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date, datetime
+from app.core.permissions import get_current_user
 
 router = APIRouter(
     prefix="/api/izin",
     tags=["Izin Absen"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 

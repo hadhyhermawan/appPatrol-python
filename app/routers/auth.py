@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, UserData
-from app.models.models import Users, LoginLogs, PengaturanUmum
+from app.models.models import Users, LoginLogs, PengaturanUmum, Karyawan
 from typing import Optional
-from app.core.security import verify_password
+from app.core.security import verify_password, get_password_hash
 from jose import jwt
 from app.core.security import SECRET_KEY, ALGORITHM
 from datetime import datetime, timedelta
@@ -17,7 +17,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=60 * 24 * 30) # 30 days
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -43,6 +43,13 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Login gagal, username atau password salah",
             )
+
+        # 2b. Auto-migrate legacy passwords (plain text) to bcrypt
+        # If verify_password succeeded but hash doesn't look like bcrypt, update it
+        if user.password and not (user.password.startswith("$2y$") or user.password.startswith("$2b$") or user.password.startswith("$2a$")):
+            user.password = get_password_hash(request.password)
+            db.add(user)
+            db.commit()
         
         # 3. Check if user has 'karyawan' role - they cannot login to web backend
         user_roles = db.execute(
@@ -166,6 +173,17 @@ async def get_current_user(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
+        
+        # Session Reset Logic: Check if token is older than user's last update
+        if "iat" in payload and user.updated_at:
+            token_iat = payload["iat"]
+            token_dt = datetime.utcfromtimestamp(token_iat)
+            if token_dt < (user.updated_at - timedelta(seconds=2)):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session expired (Reset), please login again",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         
         # Get user's roles
         roles_result = db.execute(
@@ -295,15 +313,26 @@ async def get_profile(
 
 @router.put("/auth/profile")
 async def update_profile(
-    name: str = Form(...),
+    name: Optional[str] = Form(None),
+    username: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
     phone: Optional[str] = Form(None),
     address: Optional[str] = Form(None),
+    
+    # Extra fields for Karyawan compatibility
+    nama_karyawan: Optional[str] = Form(None),
+    no_ktp: Optional[str] = Form(None),
+    no_hp: Optional[str] = Form(None),
+    alamat: Optional[str] = Form(None),
+    
+    # Photo might be 'photo' or 'foto'
     photo: Optional[UploadFile] = File(None),
+    foto: Optional[UploadFile] = File(None),
+    
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update current user profile"""
+    """Update current user profile (Sync with Karyawan data if linked)"""
     try:
         user_id = current_user["id"]
         
@@ -311,68 +340,139 @@ async def update_profile(
         user = db.query(Users).filter(Users.id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        
-        # Update basic fields
-        user.name = name
-        user.email = email
-        user.phone = phone
-        user.address = address
-        
-        # Handle photo upload
-        if photo:
-            # Create upload directory if not exists
-            upload_dir = Path("/var/www/appPatrol/storage/app/public/users")
-            upload_dir.mkdir(parents=True, exist_ok=True)
             
-            # Generate filename
-            file_extension = photo.filename.split(".")[-1]
-            filename = f"{user.username}_{user_id}.{file_extension}"
-            file_path = upload_dir / filename
-            
-            # Save file
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(photo.file, buffer)
-            
-            # Update user photo field
-            user.foto = filename
+        # Determine actual file upload (priority to 'foto' if both present, or 'photo')
+        upload_file = foto if foto else photo
         
+        # Check if user is linked to Karyawan
+        # Use raw SQL as in login logic
+        result = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user.id}).fetchone()
+        nik = result[0] if result else None
+        
+        # Logic for Karyawan
+        user_foto_name = None
+        
+        if nik:
+            karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+            if karyawan:
+                # Update Karyawan Data
+                # Prioritize specific fields (nama_karyawan) then fallback to generic (name)
+                # Note: PHP uses nama_karyawan form input.
+                
+                update_data = {}
+                if nama_karyawan: update_data['nama_karyawan'] = nama_karyawan
+                elif name: update_data['nama_karyawan'] = name
+                
+                if no_ktp: update_data['no_ktp'] = no_ktp
+                
+                if no_hp: update_data['no_hp'] = no_hp
+                elif phone: update_data['no_hp'] = phone
+                
+                if alamat: update_data['alamat'] = alamat
+                elif address: update_data['alamat'] = address
+                
+                # Apply updates
+                for key, val in update_data.items():
+                    setattr(karyawan, key, val)
+                
+                # Handle Photo for Karyawan
+                if upload_file:
+                    destination_path = Path("/var/www/appPatrol/storage/app/public/karyawan")
+                    destination_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Naming: NIK.ext
+                    file_extension = upload_file.filename.split(".")[-1]
+                    # PHP uses getClientOriginalExtension(), verify if we trust generic extension or assume defaults
+                    if not file_extension: file_extension = "jpg"
+                    
+                    foto_name = f"{nik}.{file_extension}"
+                    file_path = destination_path / foto_name
+                    
+                    # Delete old if exists
+                    if karyawan.foto:
+                         old_path = destination_path / karyawan.foto
+                         if old_path.exists():
+                             os.remove(old_path)
+                             
+                    # Save new
+                    upload_file.file.seek(0)
+                    with open(file_path, "wb") as buffer:
+                        shutil.copyfileobj(upload_file.file, buffer)
+                        
+                    karyawan.foto = foto_name
+                    
+                db.add(karyawan)
+                
+        # Logic for User (Always update user table too)
+        # Name: PHP uses nama_karyawan if filled, else user->name.
+        if nama_karyawan: user.name = nama_karyawan
+        elif name: user.name = name
+        
+        if email: user.email = email
+        if username: user.username = username
+        # user.phone and user.address - PHP doesn't explicitly update these in 'userUpdateData' array but let's keep Python logic
+        if phone: user.phone = phone
+        if address: user.address = address
+        
+        # Handle Photo for User (If NOT Karyawan OR logic dictates separate user photo?)
+        # PHP Logic: 
+        # } elseif ($request->hasFile('foto')) { destination = 'public/users'; ... }
+        # So only save to User photo if NOT Karyawan.
+        
+        if not nik and upload_file:
+             destination_path = Path("/var/www/appPatrol/storage/app/public/users")
+             destination_path.mkdir(parents=True, exist_ok=True)
+             
+             file_extension = upload_file.filename.split(".")[-1]
+             if not file_extension: file_extension = "jpg"
+             
+             foto_name = f"USR_{user.id}.{file_extension}"
+             file_path = destination_path / foto_name
+             
+             if user.foto:
+                 old_path = destination_path / user.foto
+                 if old_path.exists():
+                     os.remove(old_path)
+            
+             upload_file.file.seek(0)
+             with open(file_path, "wb") as buffer:
+                 shutil.copyfileobj(upload_file.file, buffer)
+                 
+             user.foto = foto_name
+        
+        db.add(user)
         db.commit()
         db.refresh(user)
         
-        # Get updated data with roles and permissions
-        roles = db.execute(
-            text("""
-                SELECT r.name 
-                FROM model_has_roles mhr
-                JOIN roles r ON mhr.role_id = r.id
-                WHERE mhr.model_id = :user_id
-            """),
-            {"user_id": user_id}
-        ).fetchall()
+        # Fetch updated roles/permissions for response
+        roles = db.execute(text("SELECT r.name FROM model_has_roles mhr JOIN roles r ON mhr.role_id = r.id WHERE mhr.model_id = :uid"), {"uid": user.id}).fetchall()
         role_list = [r[0] for r in roles]
         
         permissions = []
         if "Super Admin" in role_list:
             permissions = ["*"]
         else:
-            perms = db.execute(
-                text("""
-                    SELECT DISTINCT p.name
-                    FROM role_has_permissions rhp
-                    JOIN permissions p ON rhp.permission_id = p.id
-                    JOIN model_has_roles mhr ON rhp.role_id = mhr.role_id
-                    WHERE mhr.model_id = :user_id
-                """),
-                {"user_id": user_id}
-            ).fetchall()
+            perms = db.execute(text("SELECT DISTINCT p.name FROM role_has_permissions rhp JOIN permissions p ON rhp.permission_id = p.id JOIN model_has_roles mhr ON rhp.role_id = mhr.role_id WHERE mhr.model_id = :uid"), {"uid": user.id}).fetchall()
             permissions = [p[0] for p in perms]
+            
+        # Construct response
+        from os import getenv
+        base_url = getenv("BASE_URL", "https://k3guard.com")
         
-        # Construct photo URL
         photo_url = None
+        # Display photo. If Karyawan, use Karyawan photo?
+        # User Logic currently uses user.foto.
+        # But if we didn't update user.foto because they are Karyawan, what shows up?
+        # PHP Profile logic:
+        # $karyawan = ...; $data['karyawan'] = $karyawan; ... view('profile.index', $data)
+        # The view likely shows Karyawan photo if available.
+        # Python get_profile: return { data: { photo: ... } }
+        # Let's check get_profile logic in Python later if needed. For now, update logic is consistent with PHP write behavior.
+        
         if user.foto:
-            from os import getenv
-            base_url = getenv("BASE_URL", "https://k3guard.com")
-            photo_url = f"{base_url}/storage/users/{user.foto}"
+             photo_url = f"{base_url}/storage/users/{user.foto}"
+        # If user is karyawan and has no user photo but has karyawan photo?
+        # That's a get_profile concern.
         
         return {
             "status": True,
@@ -390,6 +490,7 @@ async def update_profile(
                 "created_at": user.created_at.isoformat() if user.created_at else None
             }
         }
+
     except HTTPException:
         raise
     except Exception as e:

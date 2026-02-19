@@ -14,13 +14,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     
     # Handle optional prefix difference ($2y$ vs $2b$)
     # Python bcrypt library expects $2b$ prefix for bcrypt hashes, while PHP often uses $2y$
-    if hashed_password.startswith("$2y$"):
-        hashed_password = hashed_password.replace("$2y$", "$2b$", 1)
+    temp_hashed_password = hashed_password
+    if temp_hashed_password.startswith("$2y$"):
+        temp_hashed_password = temp_hashed_password.replace("$2y$", "$2b$", 1)
     
-    hashed_password_byte = hashed_password.encode('utf-8')
+    hashed_password_byte = temp_hashed_password.encode('utf-8')
     
     # Check password
-    return bcrypt.checkpw(password_byte, hashed_password_byte)
+    try:
+        return bcrypt.checkpw(password_byte, hashed_password_byte)
+    except ValueError:
+        # Fallback: Plain text comparison (for legacy/imported users)
+        return plain_password == hashed_password
 
 def get_password_hash(password: str) -> str:
     pwd_bytes = password.encode('utf-8')

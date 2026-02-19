@@ -11,3 +11,6 @@ sqlacodegen
 python-dotenv
 httpx
 alembic
+
+python-socketio>=5.16
+simple-websocket

@@ -9,10 +9,12 @@ from datetime import datetime, date
 import shutil
 import os
 import secrets
+from app.core.permissions import get_current_user
 
 router = APIRouter(
     prefix="/api/chat-management",
     tags=["Chat Management"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 

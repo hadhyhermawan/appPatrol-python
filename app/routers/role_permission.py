@@ -14,16 +14,8 @@ from app.schemas.role_permission import (
 from typing import List
 from datetime import datetime
 
-# Temporary: Simple user object for dependency injection
-# TODO: Replace with proper JWT authentication
-class CurrentUser:
-    def __init__(self, id: int):
-        self.id = id
-
-def get_current_user() -> CurrentUser:
-    """Temporary function - returns Super Admin user for testing"""
-    # TODO: Implement proper JWT token validation
-    return CurrentUser(id=1)  # Super Admin
+from app.routers.auth_legacy import get_current_user_data as get_current_user
+# CurrentUser class is imported from auth_legacy or used implicitly by the dependency return type
 
 
 router = APIRouter(

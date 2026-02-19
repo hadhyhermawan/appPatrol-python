@@ -10,9 +10,12 @@ from typing import List, Optional, Any
 from pydantic import BaseModel
 from datetime import datetime, date, time, timedelta
 
+from app.core.permissions import get_current_user
+
 router = APIRouter(
     prefix="/api/employee-tracking",
     tags=["Employee Tracking"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 
@@ -20,6 +23,7 @@ router = APIRouter(
 class EmployeeTrackingDTO(BaseModel):
     nik: str
     nama_karyawan: str
+    lock_location: Optional[str] = None
     kode_cabang: Optional[str]
     nama_cabang: Optional[str]
     lokasi_cabang: Optional[str]
@@ -89,6 +93,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 @router.get("/map-data", response_model=dict)
 async def get_map_data(
     kode_cabang: Optional[str] = Query(None),
+    kode_dept: Optional[str] = Query(None), # Added
     kode_jadwal: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
     is_online: Optional[str] = Query(None),
@@ -118,6 +123,7 @@ async def get_map_data(
         query = db.query(
             Karyawan.nik,
             Karyawan.nama_karyawan,
+            Karyawan.lock_location,
             Karyawan.kode_cabang,
             Cabang.nama_cabang,
             Cabang.lokasi_cabang,
@@ -148,13 +154,16 @@ async def get_map_data(
 
         # Filters
         # Only those with locations and active shift
-        query = query.filter(
-            EmployeeLocations.latitude.isnot(None),
-            EmployeeLocations.longitude.isnot(None),
-            Presensi.id.isnot(None),
-            Presensi.kode_jam_kerja.isnot(None),
-            PresensiJamkerja.kode_jam_kerja.isnot(None)
-        )
+        # Filters
+        # Only those with locations and active shift
+        # REVISI: Show ALL employees
+        # query = query.filter(
+        #     EmployeeLocations.latitude.isnot(None),
+        #     EmployeeLocations.longitude.isnot(None),
+        #     Presensi.id.isnot(None),
+        #     Presensi.kode_jam_kerja.isnot(None),
+        #     PresensiJamkerja.kode_jam_kerja.isnot(None)
+        # )
 
         if kode_cabang:
             # Simple check, exact match or like name
@@ -163,6 +172,9 @@ async def get_map_data(
                 func.lower(Cabang.nama_cabang).like(f"%{kode_cabang.lower()}%")
             ))
         
+        if kode_dept:
+             query = query.filter(Karyawan.kode_dept == kode_dept)
+
         if kode_jadwal:
             query = query.filter(Presensi.kode_jam_kerja == kode_jadwal)
 
@@ -183,11 +195,21 @@ async def get_map_data(
         results = query.order_by(Karyawan.nama_karyawan).all()
 
         data_list = []
+        
+        # Helper function
+        def normalize_time_val(val):
+            if isinstance(val, timedelta):
+                total_seconds = int(val.total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                seconds = total_seconds % 60
+                return time(hours, minutes, seconds)
+            return val
+
+        temp_data_list = []
+
         for row in results:
-            # Map Row to DTO
-            # Note: SQLAlchemy rows are named tuples or Row objects
-            
-            # Recalculate is_online based on last_seen (1 hour threshold) like PHP
+            # Recalculate is_online based on last_seen (1 hour threshold)
             is_online_calc = 0
             if row.last_seen:
                 diff = datetime.now() - row.last_seen
@@ -199,32 +221,26 @@ async def get_map_data(
                 diff = datetime.now() - row.last_seen
                 menit_lalu = int(diff.total_seconds() / 60)
 
-            def normalize_time_val(val):
-                if isinstance(val, timedelta):
-                    total_seconds = int(val.total_seconds())
-                    hours = total_seconds // 3600
-                    minutes = (total_seconds % 3600) // 60
-                    seconds = total_seconds % 60
-                    return time(hours, minutes, seconds)
-                return val
-
             active_shift_masuk_normalized = normalize_time_val(row.active_shift_masuk)
             active_shift_pulang_normalized = normalize_time_val(row.active_shift_pulang)
             
-            # active_jam_in comes from Presensi.jam_in which is DateTime in model, but DTO expects time
             active_jam_in_val = row.active_jam_in
             if isinstance(active_jam_in_val, datetime):
                 active_jam_in_val = active_jam_in_val.time()
+            
+            # Use getattr for lock_location in case of any mapping issue
+            lock_loc = getattr(row, 'lock_location', None)
 
             dto = EmployeeTrackingDTO(
                 nik=row.nik,
                 nama_karyawan=row.nama_karyawan,
+                lock_location=str(lock_loc) if lock_loc is not None else None,
                 kode_cabang=row.kode_cabang,
                 nama_cabang=row.nama_cabang,
                 lokasi_cabang=row.lokasi_cabang,
                 radius_cabang=row.radius_cabang,
-                latitude=float(row.latitude) if row.latitude else None,
-                longitude=float(row.longitude) if row.longitude else None,
+                latitude=float(row.latitude) if row.latitude is not None else None,
+                longitude=float(row.longitude) if row.longitude is not None else None,
                 is_mocked=row.is_mocked,
                 provider=row.provider,
                 is_online=is_online_calc, 
@@ -256,6 +272,9 @@ async def get_map_data(
             elif shiftName:
                 dto.shift_label = shiftName
             
+            # Calculate Shift Priority
+            shift_priority = 3 # Default (No active shift / Shift passed other days)
+            
             if dto.has_active_shift_tracking and row.active_presensi_tanggal and active_shift_masuk_normalized and active_shift_pulang_normalized:
                 # Build Shift Window
                 start_dt = datetime.combine(row.active_presensi_tanggal, active_shift_masuk_normalized)
@@ -271,12 +290,19 @@ async def get_map_data(
                     dto.is_shift_passed = True
                     dto.shift_status_label = 'Shift Sudah Lewat'
                     dto.shift_status_tone = 'warning'
+                    
+                    # Priority 2: Shift Just Passed (Today)
+                    if end_dt.date() == now.date():
+                         shift_priority = 2
+                    
                 elif now < start_dt:
                     dto.shift_status_label = 'Shift Belum Mulai'
                     dto.shift_status_tone = 'info'
+                    # Priority 3
                 else:
                     dto.shift_status_label = 'Dalam Jam Shift'
                     dto.shift_status_tone = 'success'
+                    shift_priority = 1 # Active Now
             else:
                  dto.shift_status_label = 'Tidak Ada Shift Aktif' if not dto.has_active_shift_tracking else 'Window Shift Tidak Valid'
 
@@ -292,8 +318,13 @@ async def get_map_data(
                          dto.is_outside_office_radius = dto.distance_to_office_meter > dto.office_radius_meter
                          
                          if dto.is_outside_office_radius:
-                             dto.radius_status_label = 'Di Luar Radius Kantor'
-                             dto.radius_status_tone = 'danger'
+                             # FIX: Check Lock Location
+                             if dto.lock_location == '0':
+                                  dto.radius_status_label = 'Bebas Lokasi (Unlocked)'
+                                  dto.radius_status_tone = 'success'
+                             else:
+                                  dto.radius_status_label = 'Di Luar Radius Kantor'
+                                  dto.radius_status_tone = 'danger'
                          else:
                              dto.radius_status_label = 'Di Dalam Radius Kantor'
                              dto.radius_status_tone = 'success'
@@ -305,7 +336,20 @@ async def get_map_data(
             else:
                 dto.radius_status_label = 'Lokasi/radius kantor belum disetting'
 
-            data_list.append(dto)
+            # Append as tuple for sorting (priority, shift_end, last_seen, dto)
+            # Use empty min datetime if None
+            se = dto.shift_end_at or datetime.min
+            ls = dto.last_seen or datetime.min
+            temp_data_list.append((shift_priority, se, ls, dto))
+
+        # Sort Logic
+        # 1. Priority ASC (1=Active, 2=Passed today, 3=Other)
+        # 2. Shift End ASC (Earlier end first)
+        # 3. Last Seen DESC (Most recent on top) -> Reverse requires negative timestamp or separate sort keys
+        # Simple sort: Priority ASC
+        temp_data_list.sort(key=lambda x: x[0])
+        
+        data_list = [x[3] for x in temp_data_list]
 
         return {
             "status": True,

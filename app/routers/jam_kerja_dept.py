@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
-from app.models.models import PresensiJamkerjaBydept, PresensiJamkerja, Cabang, Departemen, t_presensi_jamkerja_bydept_detail
+from app.models.models import PresensiJamkerjaBydept, PresensiJamkerja, Cabang, Departemen, PresensiJamkerjaByDeptDetail
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
@@ -110,14 +110,14 @@ async def create_jam_kerja_dept(payload: CreateJamKerjaDeptDTO, db: Session = De
         # Insert details
         for i, hari in enumerate(payload.hari):
             if i < len(payload.kode_jam_kerja) and payload.kode_jam_kerja[i]:
-                stmt = t_presensi_jamkerja_bydept_detail.insert().values(
+                new_detail = PresensiJamkerjaByDeptDetail(
                     kode_jk_dept=kode_jk_dept,
                     hari=hari,
                     kode_jam_kerja=payload.kode_jam_kerja[i],
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 )
-                db.execute(stmt)
+                db.add(new_detail)
                 
         db.commit()
         return {"message": "Data Berhasil Disimpan"}
@@ -137,8 +137,8 @@ async def get_jam_kerja_dept_detail(kode_jk_dept: str, db: Session = Depends(get
     if not jk_dept:
         raise HTTPException(status_code=404, detail="Data not found")
         
-    details_query = db.query(t_presensi_jamkerja_bydept_detail).filter(
-        t_presensi_jamkerja_bydept_detail.c.kode_jk_dept == kode_jk_dept
+    details_query = db.query(PresensiJamkerjaByDeptDetail).filter(
+        PresensiJamkerjaByDeptDetail.kode_jk_dept == kode_jk_dept
     ).all()
     
     # Map details to simple dictionary for easier frontend consumption {day: kode_jam_kerja}
@@ -165,23 +165,21 @@ async def update_jam_kerja_dept(kode_jk_dept: str, payload: UpdateJamKerjaDeptDT
         
     try:
         # Delete existing details
-        db.execute(
-            t_presensi_jamkerja_bydept_detail.delete().where(
-                t_presensi_jamkerja_bydept_detail.c.kode_jk_dept == kode_jk_dept
-            )
-        )
+        db.query(PresensiJamkerjaByDeptDetail).filter(
+            PresensiJamkerjaByDeptDetail.kode_jk_dept == kode_jk_dept
+        ).delete()
         
         # Insert new details
         for i, hari in enumerate(payload.hari):
              if i < len(payload.kode_jam_kerja) and payload.kode_jam_kerja[i]:
-                stmt = t_presensi_jamkerja_bydept_detail.insert().values(
+                new_detail = PresensiJamkerjaByDeptDetail(
                     kode_jk_dept=kode_jk_dept,
                     hari=hari,
                     kode_jam_kerja=payload.kode_jam_kerja[i],
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 )
-                db.execute(stmt)
+                db.add(new_detail)
         
         jk_dept.updated_at = datetime.now()
         db.commit()

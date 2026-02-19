@@ -54,17 +54,24 @@ async def get_users(
         for user in data:
             dto = UserDTO.model_validate(user)
             
-            # Fetch Role manually
+            # Fetch Roles
             # model_has_roles: model_id = user.id, model_type = 'App\Models\User' usually
-            role_link = db.query(ModelHasRoles).filter(
-                ModelHasRoles.model_id == user.id
-            ).first()
+            user_roles = db.query(Roles).join(ModelHasRoles, Roles.id == ModelHasRoles.role_id).filter(
+                ModelHasRoles.model_id == user.id,
+                ModelHasRoles.model_type.like('%User') # Handle namespace variations
+            ).all()
             
-            if role_link:
-                role = db.query(Roles).filter(Roles.id == role_link.role_id).first()
-                if role:
-                    dto.role = role.name
-                    
+            role_names = [r.name for r in user_roles]
+            
+            # Priority Logic & Formatting for Frontend Compatibility
+            if "super admin" in role_names:
+                dto.role = "Super Admin" # Match Frontend Expectation
+            elif role_names:
+                # Title case for others: 'admin departemen' -> 'Admin Departemen'
+                dto.role = role_names[0].title() 
+            else:
+                dto.role = "User"
+            
             result.append(dto)
             
         return result

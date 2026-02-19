@@ -10,6 +10,7 @@ from functools import wraps
 from jose import jwt, JWTError
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models.models import Users
+from datetime import datetime, timedelta
 
 SUPER_ADMIN_ROLE = "super admin"
 
@@ -352,6 +353,20 @@ async def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Session Reset Logic: Check if token is older than user's last update
+    if "iat" in payload and user.updated_at:
+        token_iat = payload["iat"]
+        # Convert IAT (timestamp) to naive datetime (UTC) to match user.updated_at which is stored as naive UTC
+        token_dt = datetime.utcfromtimestamp(token_iat)
+        
+        # Buffer of 2 seconds for any tiny clock skews or DB roundtrip time
+        if token_dt < (user.updated_at - timedelta(seconds=2)):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired (Reset), please login again",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     
     # Get user's roles
     roles_result = db.execute(

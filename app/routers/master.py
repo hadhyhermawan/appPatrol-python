@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from app.database import get_db
-from app.models.models import Karyawan, Departemen, Jabatan, Cabang, StatusKawin, t_users_karyawan, PatrolPointMaster, Cuti, PresensiJamkerja, PatrolSchedules, DepartmentTaskPointMaster, SetJamKerjaByDay, SetJamKerjaByDate
-from typing import List, Optional
+from app.models.models import Karyawan, Departemen, Jabatan, Cabang, StatusKawin, Userkaryawan, PatrolPointMaster, Cuti, PresensiJamkerja, PatrolSchedules, DepartmentTaskPointMaster, SetJamKerjaByDay, SetJamKerjaByDate, PresensiJamkerjaBydateExtra, SetJamKerjaByDate, Users, KaryawanWajah
+from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, validator
 from datetime import date, datetime, time
 import os
@@ -44,6 +44,16 @@ class KaryawanDTO(BaseModel):
     nama_dept: Optional[str]
     nama_jabatan: Optional[str]
     nama_cabang: Optional[str]
+    
+    kode_cabang: Optional[str] = None
+    kode_dept: Optional[str] = None
+    kode_jabatan: Optional[str] = None
+    kode_status_kawin: Optional[str] = None
+    jenis_kelamin: Optional[str] = None
+    status_karyawan: Optional[str] = None
+    tempat_lahir: Optional[str] = None
+    tanggal_lahir: Optional[date] = None
+    alamat: Optional[str] = None
     
     # New Extended Fields
     no_ktp: str
@@ -667,13 +677,13 @@ class JamKerjaDTO(BaseModel):
 class JamKerjaCreateRequest(BaseModel):
     kode_jam_kerja: str
     nama_jam_kerja: str
-    jam_masuk: str
-    jam_pulang: str
+    jam_masuk: Any
+    jam_pulang: Any
     istirahat: str
     total_jam: int
     lintashari: str
-    jam_awal_istirahat: Optional[str] = None
-    jam_akhir_istirahat: Optional[str] = None
+    jam_awal_istirahat: Optional[Any] = None
+    jam_akhir_istirahat: Optional[Any] = None
     keterangan: Optional[str] = None
 
     @validator('jam_masuk', 'jam_pulang', 'jam_awal_istirahat', 'jam_akhir_istirahat', pre=True)
@@ -1143,13 +1153,13 @@ async def get_karyawan_list(
             Jabatan.nama_jabatan,
             Cabang.nama_cabang,
             StatusKawin.status_kawin.label("keterangan_status_kawin"),
-            t_users_karyawan.c.id_user,
+            Userkaryawan.id_user,
             sisa_hari_col.label("sisa_hari_anggota")
         ).outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept)\
          .outerjoin(Jabatan, Karyawan.kode_jabatan == Jabatan.kode_jabatan)\
          .outerjoin(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
          .outerjoin(StatusKawin, Karyawan.kode_status_kawin == StatusKawin.kode_status_kawin)\
-         .outerjoin(t_users_karyawan, Karyawan.nik == t_users_karyawan.c.nik)
+         .outerjoin(Userkaryawan, Karyawan.nik == Userkaryawan.nik)
 
         # Filters
         if search:
@@ -1247,7 +1257,7 @@ async def get_karyawan_list(
 def save_upload(file_obj: UploadFile, subfolder: str = "") -> str:
     if not file_obj or not file_obj.filename: return None
     try:
-        base_dir = "storage/karyawan"
+        base_dir = "/var/www/appPatrol/storage/app/public/karyawan"
         target_dir = os.path.join(base_dir, subfolder)
         os.makedirs(target_dir, exist_ok=True)
         
@@ -1275,7 +1285,7 @@ async def create_karyawan(
     tanggal_masuk: date = Form(...),
     status_karyawan: str = Form('C'), # C=Contract, P=Permanent
     status_aktif_karyawan: str = Form('1'),
-    password: str = Form(...),
+    # password removed, default 12345
     
     # Optional Fields
     tempat_lahir: Optional[str] = Form(None),
@@ -1319,7 +1329,7 @@ async def create_karyawan(
         # Save files
         foto_path = save_upload(foto, "")
         foto_ktp_path = save_upload(foto_ktp, "ktp")
-        foto_ka_path = save_upload(foto_kartu_anggota, "kartu_anggota")
+        foto_ka_path = save_upload(foto_kartu_anggota, "kartu")
         foto_ijazah_path = save_upload(foto_ijazah, "ijazah")
         foto_sim_path = save_upload(foto_sim, "sim")
         
@@ -1334,7 +1344,7 @@ async def create_karyawan(
             tanggal_masuk=tanggal_masuk,
             status_karyawan=status_karyawan,
             status_aktif_karyawan=status_aktif_karyawan,
-            password=get_password_hash(password), 
+            password=get_password_hash(nik), 
             tempat_lahir=tempat_lahir,
             tanggal_lahir=tanggal_lahir,
             alamat=alamat,
@@ -1374,6 +1384,142 @@ async def create_karyawan(
         
     except Exception as e:
         db.rollback()
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class KaryawanUserDTO(BaseModel):
+    username: str
+    email: str
+
+class KaryawanWajahDTO(BaseModel):
+    id: int
+    wajah: Optional[str]
+
+class KaryawanDetailDTO(KaryawanDTO):
+    user: Optional[KaryawanUserDTO] = None
+    wajah: Optional[List[KaryawanWajahDTO]] = []
+
+class KaryawanDetailResponse(BaseModel):
+    status: bool
+    data: Optional[KaryawanDetailDTO] = None
+    message: Optional[str] = None
+
+@router.get("/karyawan/{nik}", response_model=KaryawanDetailResponse)
+async def get_karyawan_detail(
+    nik: str,
+    current_user: CurrentUser = Depends(require_permission_dependency("karyawan.index")),
+    db: Session = Depends(get_db)
+):
+    # Prevent processing 'undefined' from frontend mistakes
+    if nik == "undefined":
+        print("Warning: Received 'undefined' NIK in get_karyawan_detail")
+        raise HTTPException(status_code=404, detail="Invalid NIK")
+
+    try:
+        sisa_hari_col = func.datediff(Karyawan.masa_aktif_kartu_anggota, func.current_date())
+        
+        row = db.query(
+            Karyawan,
+            Departemen.nama_dept,
+            Jabatan.nama_jabatan,
+            Cabang.nama_cabang,
+            StatusKawin.status_kawin.label("keterangan_status_kawin"),
+            Userkaryawan.id_user,
+            sisa_hari_col.label("sisa_hari_anggota")
+        ).outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept)\
+         .outerjoin(Jabatan, Karyawan.kode_jabatan == Jabatan.kode_jabatan)\
+         .outerjoin(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+         .outerjoin(StatusKawin, Karyawan.kode_status_kawin == StatusKawin.kode_status_kawin)\
+         .outerjoin(Userkaryawan, Karyawan.nik == Userkaryawan.nik)\
+         .filter(Karyawan.nik == nik)\
+         .first()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
+            
+        k = row[0] # Karyawan instance
+        nama_dept = row[1]
+        nama_jabatan = row[2]
+        nama_cabang = row[3]
+        keterangan_status_kawin = row[4]
+        id_user = row[5]
+        sisa_hari_anggota = row[6]
+        
+        # 2. Get User Info
+        user_info = None
+        if id_user:
+            user_obj = db.query(Users).filter(Users.id == id_user).first()
+            if user_obj:
+                user_info = KaryawanUserDTO(username=user_obj.username, email=user_obj.email)
+                
+        # 3. Get Wajah Info
+        wajah_list = []
+        wajah_rows = db.query(KaryawanWajah).filter(KaryawanWajah.nik == nik).all()
+        
+        # Determine folder name based on legacy logic: {nik}-{firstname_lower}
+        # Example: 123-budi
+        first_name = k.nama_karyawan.split(' ')[0].lower() if k.nama_karyawan else "unknown"
+        wajah_folder = f"storage/uploads/facerecognition/{nik}-{first_name}"
+
+        for w in wajah_rows:
+            wajah_list.append(KaryawanWajahDTO(
+                id=w.id,
+                wajah=get_full_image_url(w.wajah, folder=wajah_folder)
+            ))
+
+        data_dto = KaryawanDetailDTO(
+            nik=k.nik,
+            nama_karyawan=k.nama_karyawan,
+            no_hp=k.no_hp,
+            foto=get_full_image_url(k.foto),
+            status_aktif_karyawan=k.status_aktif_karyawan,
+            
+            nama_dept=nama_dept or "-",
+            nama_jabatan=nama_jabatan or "-",
+            nama_cabang=nama_cabang or "-",
+
+            kode_cabang=k.kode_cabang,
+            kode_dept=k.kode_dept,
+            kode_jabatan=k.kode_jabatan,
+            kode_status_kawin=k.kode_status_kawin,
+            jenis_kelamin=k.jenis_kelamin,
+            status_karyawan=k.status_karyawan,
+            tempat_lahir=k.tempat_lahir,
+            tanggal_lahir=k.tanggal_lahir,
+            alamat=k.alamat,
+            
+            no_ktp=k.no_ktp,
+            tanggal_masuk=k.tanggal_masuk,
+            no_kartu_anggota=k.no_kartu_anggota,
+            masa_aktif_kartu_anggota=k.masa_aktif_kartu_anggota,
+            keterangan_status_kawin=keterangan_status_kawin,
+            pendidikan_terakhir=k.pendidikan_terakhir,
+            no_ijazah=k.no_ijazah,
+            kontak_darurat_nama=k.kontak_darurat_nama,
+            kontak_darurat_hp=k.kontak_darurat_hp,
+            kontak_darurat_alamat=k.kontak_darurat_alamat,
+            lock_location=k.lock_location,
+            lock_jam_kerja=k.lock_jam_kerja,
+            lock_device_login=k.lock_device_login,
+            allow_multi_device=k.allow_multi_device,
+            pin=k.pin,
+            foto_ktp=get_full_image_url(k.foto_ktp, folder="storage/karyawan/ktp"),
+            foto_kartu_anggota=get_full_image_url(k.foto_kartu_anggota, folder="storage/karyawan/kartu"),
+            foto_ijazah=get_full_image_url(k.foto_ijazah, folder="storage/karyawan/ijazah"),
+            no_sim=k.no_sim,
+            kode_jadwal=k.kode_jadwal,
+            id_user=id_user,
+            sisa_hari_anggota=sisa_hari_anggota,
+            
+            user=user_info,
+            wajah=wajah_list
+        )
+        
+        return KaryawanDetailResponse(status=True, data=data_dto)
+
+    except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1477,7 +1623,7 @@ async def update_karyawan(
             if path: karyawan.foto_ktp = path
             
         if foto_kartu_anggota:
-            path = save_upload(foto_kartu_anggota, "kartu_anggota")
+            path = save_upload(foto_kartu_anggota, "kartu")
             if path: karyawan.foto_kartu_anggota = path
             
         if foto_ijazah:
@@ -1605,10 +1751,25 @@ async def reset_session(nik: str, db: Session = Depends(get_db)):
         if not karyawan:
             raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
         
+        # 1. Reset Lock
         karyawan.lock_device_login = '0'
+        
+        # 2. Invalidate Session (Force Logout)
+        # Find User ID associated with Karyawan
+        user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.nik == nik).first()
+        
+        msg_extra = ""
+        if user_karyawan:
+            user = db.query(Users).filter(Users.id == user_karyawan.id_user).first()
+            if user:
+                # Update updated_at to invalidate tokens issued before now
+                user.updated_at = datetime.utcnow()
+                db.add(user)
+                msg_extra = " & Token Invalidated"
+        
         db.commit()
         
-        return {"status": True, "message": "Sesi berhasil direset (Lock Device dibuka)."}
+        return {"status": True, "message": f"Sesi berhasil direset (Lock Device dibuka){msg_extra}."}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1671,3 +1832,237 @@ async def save_karyawan_jam_kerja(nik: str, payload: SetJamKerjaDTO, db: Session
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# --------------------------------------------------------------------------------------
+# JAM KERJA BY DATE (Jadwal Harian & Extra)
+# --------------------------------------------------------------------------------------
+
+class JamKerjaDateDTO(BaseModel):
+    tanggal: date
+    kode_jam_kerja: str
+
+class JamKerjaDateExtraDTO(BaseModel):
+    tanggal: date
+    kode_jam_kerja: str
+    jenis: str = "double_shift"
+    keterangan: Optional[str] = None
+
+@router.get("/karyawan/{nik}/jam-kerja-date")
+async def get_jam_kerja_by_date(nik: str, bulan: int = Query(...), tahun: int = Query(...), db: Session = Depends(get_db)):
+    try:
+        data = db.query(SetJamKerjaByDate, PresensiJamkerja)\
+            .join(PresensiJamkerja, SetJamKerjaByDate.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
+            .filter(SetJamKerjaByDate.nik == nik)\
+            .filter(func.month(SetJamKerjaByDate.tanggal) == bulan)\
+            .filter(func.year(SetJamKerjaByDate.tanggal) == tahun)\
+            .order_by(SetJamKerjaByDate.tanggal).all()
+            
+        return [
+            {
+                "nik": r[0].nik,
+                "tanggal": r[0].tanggal,
+                "kode_jam_kerja": r[0].kode_jam_kerja,
+                "nama_jam_kerja": r[1].nama_jam_kerja,
+                "jam_masuk": str(r[1].jam_masuk),
+                "jam_pulang": str(r[1].jam_pulang)
+            }
+            for r in data
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/karyawan/{nik}/jam-kerja-date")
+async def create_jam_kerja_by_date(nik: str, payload: JamKerjaDateDTO, db: Session = Depends(get_db)):
+    try:
+        # Cek duplicate
+        existing = db.query(SetJamKerjaByDate).filter(
+            SetJamKerjaByDate.nik == nik, 
+            SetJamKerjaByDate.tanggal == payload.tanggal
+        ).first()
+        
+        if existing:
+            # Update existing
+            existing.kode_jam_kerja = payload.kode_jam_kerja
+        else:
+            # Create new
+            new_item = SetJamKerjaByDate(
+                nik=nik,
+                tanggal=payload.tanggal,
+                kode_jam_kerja=payload.kode_jam_kerja,
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            db.add(new_item)
+            
+        db.commit()
+        return {"status": True, "message": "Jadwal berhasil disimpan"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/karyawan/{nik}/jam-kerja-date")
+async def delete_jam_kerja_by_date(nik: str, tanggal: date = Query(...), db: Session = Depends(get_db)):
+    try:
+        db.query(SetJamKerjaByDate).filter(
+            SetJamKerjaByDate.nik == nik,
+            SetJamKerjaByDate.tanggal == tanggal
+        ).delete()
+        db.commit()
+        return {"status": True, "message": "Jadwal berhasil dihapus"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# EXTRA JAM KERJA
+
+@router.get("/karyawan/{nik}/jam-kerja-extra")
+async def get_jam_kerja_extra(nik: str, bulan: int = Query(...), tahun: int = Query(...), db: Session = Depends(get_db)):
+    try:
+        data = db.query(PresensiJamkerjaBydateExtra, PresensiJamkerja)\
+            .join(PresensiJamkerja, PresensiJamkerjaBydateExtra.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
+            .filter(PresensiJamkerjaBydateExtra.nik == nik)\
+            .filter(func.month(PresensiJamkerjaBydateExtra.tanggal) == bulan)\
+            .filter(func.year(PresensiJamkerjaBydateExtra.tanggal) == tahun)\
+            .order_by(PresensiJamkerjaBydateExtra.tanggal).all()
+            
+        return [
+            {
+                "nik": r[0].nik,
+                "tanggal": r[0].tanggal,
+                "kode_jam_kerja": r[0].kode_jam_kerja,
+                "jenis": r[0].jenis,
+                "keterangan": r[0].keterangan,
+                "nama_jam_kerja": r[1].nama_jam_kerja,
+                "jam_masuk": str(r[1].jam_masuk),
+                "jam_pulang": str(r[1].jam_pulang)
+            }
+            for r in data
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/karyawan/{nik}/jam-kerja-extra")
+async def create_jam_kerja_extra(nik: str, payload: JamKerjaDateExtraDTO, db: Session = Depends(get_db)):
+    try:
+        # Max 1 per tanggal validation? Laravel says "Max 1 per tanggal"
+        existing = db.query(PresensiJamkerjaBydateExtra).filter(
+            PresensiJamkerjaBydateExtra.nik == nik,
+            PresensiJamkerjaBydateExtra.tanggal == payload.tanggal
+        ).first()
+        
+        if existing:
+            # Update existing
+            existing.kode_jam_kerja = payload.kode_jam_kerja
+            existing.jenis = payload.jenis
+            existing.keterangan = payload.keterangan
+            existing.updated_at = datetime.now()
+        else:
+            new_item = PresensiJamkerjaBydateExtra(
+                nik=nik,
+                tanggal=payload.tanggal,
+                kode_jam_kerja=payload.kode_jam_kerja,
+                jenis=payload.jenis,
+                keterangan=payload.keterangan or "",
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            db.add(new_item)
+            
+        db.commit()
+        return {"status": True, "message": "Jadwal Tambahan berhasil disimpan"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/karyawan/{nik}/jam-kerja-extra")
+async def delete_jam_kerja_extra(nik: str, tanggal: date = Query(...), db: Session = Depends(get_db)):
+    try:
+        db.query(PresensiJamkerjaBydateExtra).filter(
+            PresensiJamkerjaBydateExtra.nik == nik,
+            PresensiJamkerjaBydateExtra.tanggal == tanggal
+        ).delete()
+        db.commit()
+        return {"status": True, "message": "Jadwal Tambahan berhasil dihapus"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --------------------------------------------------------------------------------------
+# USER MANAGEMENT (Create / Delete Akun Login)
+# --------------------------------------------------------------------------------------
+
+@router.post("/karyawan/{nik}/create-user")
+async def create_user_from_karyawan(nik: str, db: Session = Depends(get_db)):
+    try:
+        karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+        if not karyawan:
+            raise HTTPException(status_code=404, detail="Karyawan tidak ditemukan")
+        
+        # Check existing Userkaryawan
+        existing_link = db.query(Userkaryawan).filter(Userkaryawan.nik == nik).first()
+        if existing_link:
+             raise HTTPException(status_code=400, detail="Karyawan sudah memiliki akun user")
+
+        # Create User
+        # Default password = NIK (Hash)
+        hashed_password = get_password_hash(nik)
+        
+        # Email format: nik without dots + @k3guard.com
+        email_prefix = nik.replace(".", "").lower()
+        email = f"{email_prefix}@k3guard.com"
+        
+        # Check username/email collision
+        if db.query(Users).filter((Users.username == nik) | (Users.email == email)).first():
+             raise HTTPException(status_code=400, detail="Username/Email sudah digunakan")
+        
+        new_user = Users(
+            name=karyawan.nama_karyawan,
+            username=nik,
+            email=email, 
+            password=hashed_password,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        db.add(new_user)
+        db.flush() 
+        
+        # Link to Karyawan (Userkaryawan)
+        new_link = Userkaryawan(
+            nik=nik,
+            id_user=new_user.id,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        db.add(new_link)
+        
+        db.commit()
+        return {"status": True, "message": f"User berhasil dibuat. Password default: {nik}"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/karyawan/{nik}/delete-user")
+async def delete_user_from_karyawan(nik: str, db: Session = Depends(get_db)):
+    try:
+        # Check link
+        user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.nik == nik).first()
+        if not user_karyawan:
+            raise HTTPException(status_code=400, detail="Karyawan belum memiliki akun user")
+            
+        user_id = user_karyawan.id_user
+        
+        # Delete Link
+        db.delete(user_karyawan)
+        
+        # Delete User
+        user = db.query(Users).filter(Users.id == user_id).first()
+        if user:
+            db.delete(user)
+            
+        db.commit()
+        return {"status": True, "message": "User berhasil dihapus"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

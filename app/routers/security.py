@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, desc
 from app.database import get_db
-from app.models.models import Turlalin, Karyawan, SafetyBriefings, Barang, Tamu, PatrolSessions, PatrolSchedules, SuratMasuk, SuratKeluar, PatrolPoints, DepartmentTaskSessions
+from app.models.models import Turlalin, Karyawan, SafetyBriefings, Barang, Tamu, PatrolSessions, PatrolSchedules, SuratMasuk, SuratKeluar, PatrolPoints, DepartmentTaskSessions, Presensi, SetJamKerjaByDay, SetJamKerjaByDate
 from typing import List, Optional, Any
 from pydantic import BaseModel
 from datetime import datetime
@@ -10,9 +10,14 @@ import os
 import secrets
 from fastapi.responses import FileResponse
 
+from app.core.permissions import get_current_user
+
+STORAGE_BASE_URL = "https://frontend.k3guard.com/api-py/storage/"
+
 router = APIRouter(
     prefix="/api/security",
     tags=["security"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 
@@ -78,13 +83,19 @@ async def get_turlalin_list(
         # Map manually if needed to include guard names not directly in Turlalin model relation lazy loading
         result = []
         for item in data:
-            dto = TurlalinDTO.model_validate(item)
+            dto = TurlalinDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_guard_masuk = item.karyawan.nama_karyawan
             # For keluar guard
             # SQLAlchemy relationship might handle it if defined. Checked model: yes, karyawan_
             if item.karyawan_:
                 dto.nama_guard_keluar = item.karyawan_.nama_karyawan
+            
+            if dto.foto and not dto.foto.startswith(('http', 'https')):
+                dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+            if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+                dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
+
             result.append(dto)
             
         return result
@@ -108,9 +119,12 @@ async def create_turlalin(request: TurlalinCreateRequest, db: Session = Depends(
         db.refresh(new_data)
         
         # Populate name manually for response
-        dto = TurlalinDTO.model_validate(new_data)
+        dto = TurlalinDTO.from_orm(new_data)
         if new_data.karyawan:
              dto.nama_guard_masuk = new_data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
              
         return dto
     except Exception as e:
@@ -139,11 +153,16 @@ async def update_turlalin(id: int, request: TurlalinUpdateRequest, db: Session =
         db.commit()
         db.refresh(data)
         
-        dto = TurlalinDTO.model_validate(data)
+        dto = TurlalinDTO.from_orm(data)
         if data.karyawan:
              dto.nama_guard_masuk = data.karyawan.nama_karyawan
         if data.karyawan_:
              dto.nama_guard_keluar = data.karyawan_.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+            dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
              
         return dto
     except Exception as e:
@@ -220,9 +239,13 @@ async def get_safety_briefings(
         
         result = []
         for item in data:
-            dto = SafetyBriefingDTO.model_validate(item)
+            dto = SafetyBriefingDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_karyawan = item.karyawan.nama_karyawan
+            
+            if dto.foto and not dto.foto.startswith(('http', 'https')):
+                dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+                
             result.append(dto)
             
         return result
@@ -244,9 +267,12 @@ async def create_safety_briefing(request: SafetyBriefingCreateRequest, db: Sessi
         db.commit()
         db.refresh(new_data)
         
-        dto = SafetyBriefingDTO.model_validate(new_data)
+        dto = SafetyBriefingDTO.from_orm(new_data)
         if new_data.karyawan:
             dto.nama_karyawan = new_data.karyawan.nama_karyawan
+
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
         
         return dto
     except Exception as e:
@@ -272,9 +298,12 @@ async def update_safety_briefing(id: int, request: SafetyBriefingUpdateRequest, 
         db.commit()
         db.refresh(data)
         
-        dto = SafetyBriefingDTO.model_validate(data)
+        dto = SafetyBriefingDTO.from_orm(data)
         if data.karyawan:
             dto.nama_karyawan = data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
             
         return dto
     except Exception as e:
@@ -350,7 +379,15 @@ async def get_barang_list(
             query = query.filter(Barang.created_at <= date_end)
             
         data = query.order_by(desc(Barang.created_at)).limit(limit).all()
-        return data
+        result = []
+        for item in data:
+            dto = BarangDTO.from_orm(item)
+            if dto.image and not dto.image.startswith(('http', 'https')):
+                dto.image = f"{STORAGE_BASE_URL}{dto.image}"
+            if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+                dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
+            result.append(dto)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -493,10 +530,17 @@ async def get_tamu_list(
         
         result = []
         for item in data:
-            dto = TamuDTO.model_validate(item)
+            dto = TamuDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_satpam_masuk = item.karyawan.nama_karyawan
             result.append(dto)
+
+        # Fix Image URLs for Tamu
+        for dto in result:
+             if dto.foto and not dto.foto.startswith(('http', 'https')):
+                dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+             if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+                dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
             
         return result
     except Exception as e:
@@ -528,10 +572,15 @@ async def create_tamu(request: TamuCreateRequest, db: Session = Depends(get_db))
         db.commit()
         db.refresh(new_data)
         
-        dto = TamuDTO.model_validate(new_data)
+        dto = TamuDTO.from_orm(new_data)
         if new_data.karyawan:
             dto.nama_satpam_masuk = new_data.karyawan.nama_karyawan
             
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+             dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+             dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
+
         return dto
     except Exception as e:
         db.rollback()
@@ -566,10 +615,15 @@ async def update_tamu(id: int, request: TamuCreateRequest, db: Session = Depends
         db.commit()
         db.refresh(data)
         
-        dto = TamuDTO.model_validate(data)
+        dto = TamuDTO.from_orm(data)
         if data.karyawan:
             dto.nama_satpam_masuk = data.karyawan.nama_karyawan
             
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+             dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
+             dto.foto_keluar = f"{STORAGE_BASE_URL}{dto.foto_keluar}"
+             
         return dto
     except Exception as e:
         db.rollback()
@@ -613,6 +667,7 @@ class PatrolSessionDTO(BaseModel):
     
     class Config:
         from_attributes = True
+        orm_mode = True
 
 class PatrolSessionCreateRequest(BaseModel):
     nik: str
@@ -632,6 +687,7 @@ async def get_patrol_list(
     db: Session = Depends(get_db)
 ):
     try:
+        print(f"DEBUG PATROL REQUEST: search='{search}', date_start={date_start}, date_end={date_end}, limit={limit}")
         query = db.query(PatrolSessions).outerjoin(Karyawan, PatrolSessions.nik == Karyawan.nik)
         
         if search:
@@ -647,21 +703,37 @@ async def get_patrol_list(
             query = query.filter(PatrolSessions.tanggal <= date_end)
             
         data = query.order_by(desc(PatrolSessions.created_at)).limit(limit).all()
+        print(f"DEBUG PATROL QUERY FOUND: {len(data)} items")
         
         result = []
         for item in data:
-            dto = PatrolSessionDTO.model_validate(item)
-            # Fetch name manually or via relationship if exists. Since join is used, can access if joined object is returned.
-            # But query(PatrolSessions) only returns PatrolSessions.
-            # Let's fetch name separately or assume standard join if we select both.
-            # Optimization: Fetch name for each
-            karyawan = db.query(Karyawan).filter(Karyawan.nik == item.nik).first()
-            if karyawan:
-                dto.nama_petugas = karyawan.nama_karyawan
-            result.append(dto)
+            try:
+                dto = PatrolSessionDTO.from_orm(item)
+                # Fetch name manually or via relationship if exists. Since join is used, can access if joined object is returned.
+                # But query(PatrolSessions) only returns PatrolSessions.
+                # Let's fetch name separately or assume standard join if we select both.
+                # Optimization: Fetch name for each
+                karyawan = db.query(Karyawan).filter(Karyawan.nik == item.nik).first()
+                if karyawan:
+                    dto.nama_petugas = karyawan.nama_karyawan
+                
+                # Construct Foto Absen URL
+                if item.foto_absen:
+                    ymd = item.tanggal.strftime('%Y%m%d')
+                    folder = f"{item.nik}-{ymd}-absenpatrol"
+                    filename = os.path.basename(item.foto_absen)
+                    # Static path handling
+                    dto.foto_absen = f"https://frontend.k3guard.com/api-py/storage/uploads/patroli/{folder}/{filename}"
+
+                result.append(dto)
+            except Exception as e:
+                print(f"SKIPPING ERROR ITEM ID {getattr(item, 'id', 'unknown')}: {str(e)}")
+                continue
             
         return result
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/patrol", response_model=PatrolSessionDTO)
@@ -682,7 +754,7 @@ async def create_patrol(request: PatrolSessionCreateRequest, db: Session = Depen
         db.commit()
         db.refresh(new_data)
         
-        dto = PatrolSessionDTO.model_validate(new_data)
+        dto = PatrolSessionDTO.from_orm(new_data)
         karyawan = db.query(Karyawan).filter(Karyawan.nik == new_data.nik).first()
         if karyawan:
             dto.nama_petugas = karyawan.nama_karyawan
@@ -712,7 +784,7 @@ async def update_patrol(id: int, request: PatrolSessionCreateRequest, db: Sessio
         db.commit()
         db.refresh(data)
         
-        dto = PatrolSessionDTO.model_validate(data)
+        dto = PatrolSessionDTO.from_orm(data)
         karyawan = db.query(Karyawan).filter(Karyawan.nik == data.nik).first()
         if karyawan:
             dto.nama_petugas = karyawan.nama_karyawan
@@ -914,6 +986,8 @@ class SuratCreateRequest(BaseModel):
 @router.get("/surat-masuk", response_model=List[SuratMasukDTO])
 async def get_surat_masuk(
     search: Optional[str] = Query(None, description="Search by No Surat/Asal/Perihal"),
+    date_start: Optional[datetime] = Query(None),
+    date_end: Optional[datetime] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -925,12 +999,25 @@ async def get_surat_masuk(
                 (SuratMasuk.asal_surat.like(f"%{search}%")) |
                 (SuratMasuk.perihal.like(f"%{search}%"))
             )
+        
+        if date_start:
+            query = query.filter(SuratMasuk.tanggal_surat >= date_start)
+            
+        if date_end:
+            query = query.filter(SuratMasuk.tanggal_surat <= date_end)
+            
         data = query.order_by(desc(SuratMasuk.tanggal_surat)).limit(limit).all()
         result = []
         for item in data:
-            dto = SuratMasukDTO.model_validate(item)
+            dto = SuratMasukDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_satpam = item.karyawan.nama_karyawan
+            
+            if dto.foto and not dto.foto.startswith(('http', 'https')):
+                dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+            if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+                dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+                
             result.append(dto)
         return result
     except Exception as e:
@@ -957,9 +1044,15 @@ async def create_surat_masuk(request: SuratCreateRequest, db: Session = Depends(
         db.add(new_data)
         db.commit()
         db.refresh(new_data)
-        dto = SuratMasukDTO.model_validate(new_data)
+        dto = SuratMasukDTO.from_orm(new_data)
         if new_data.karyawan:
              dto.nama_satpam = new_data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+            dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+             
         return dto
     except Exception as e:
         db.rollback()
@@ -990,9 +1083,15 @@ async def update_surat_masuk(id: int, request: SuratCreateRequest, db: Session =
         
         db.commit()
         db.refresh(data)
-        dto = SuratMasukDTO.model_validate(data)
+        dto = SuratMasukDTO.from_orm(data)
         if data.karyawan:
              dto.nama_satpam = data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+            dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+             
         return dto
     except Exception as e:
         db.rollback()
@@ -1015,6 +1114,8 @@ async def delete_surat_masuk(id: int, db: Session = Depends(get_db)):
 @router.get("/surat-keluar", response_model=List[SuratKeluarDTO])
 async def get_surat_keluar(
     search: Optional[str] = Query(None, description="Search by No Surat/Perihal"),
+    date_start: Optional[datetime] = Query(None),
+    date_end: Optional[datetime] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -1025,12 +1126,25 @@ async def get_surat_keluar(
                 (SuratKeluar.nomor_surat.like(f"%{search}%")) |
                 (SuratKeluar.perihal.like(f"%{search}%"))
             )
+            
+        if date_start:
+            query = query.filter(SuratKeluar.tanggal_surat >= date_start)
+            
+        if date_end:
+            query = query.filter(SuratKeluar.tanggal_surat <= date_end)
+            
         data = query.order_by(desc(SuratKeluar.tanggal_surat)).limit(limit).all()
         result = []
         for item in data:
-            dto = SuratKeluarDTO.model_validate(item)
+            dto = SuratKeluarDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_satpam = item.karyawan.nama_karyawan
+            
+            if dto.foto and not dto.foto.startswith(('http', 'https')):
+                dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+            if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+                dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+                
             result.append(dto)
         return result
     except Exception as e:
@@ -1056,9 +1170,15 @@ async def create_surat_keluar(request: SuratCreateRequest, db: Session = Depends
         db.add(new_data)
         db.commit()
         db.refresh(new_data)
-        dto = SuratKeluarDTO.model_validate(new_data)
+        dto = SuratKeluarDTO.from_orm(new_data)
         if new_data.karyawan:
              dto.nama_satpam = new_data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+            dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+             
         return dto
     except Exception as e:
         db.rollback()
@@ -1088,9 +1208,15 @@ async def update_surat_keluar(id: int, request: SuratCreateRequest, db: Session 
         
         db.commit()
         db.refresh(data)
-        dto = SuratKeluarDTO.model_validate(data)
+        dto = SuratKeluarDTO.from_orm(data)
         if data.karyawan:
              dto.nama_satpam = data.karyawan.nama_karyawan
+        
+        if dto.foto and not dto.foto.startswith(('http', 'https')):
+            dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
+        if dto.foto_penerima and not dto.foto_penerima.startswith(('http', 'https')):
+            dto.foto_penerima = f"{STORAGE_BASE_URL}{dto.foto_penerima}"
+             
         return dto
     except Exception as e:
         db.rollback()
@@ -1267,7 +1393,7 @@ async def get_department_tasks(
         
         result = []
         for item in data:
-            dto = DeptTaskSessionDTO.model_validate(item)
+            dto = DeptTaskSessionDTO.from_orm(item)
             karyawan = db.query(Karyawan).filter(Karyawan.nik == item.nik).first()
             if karyawan:
                 dto.nama_petugas = karyawan.nama_karyawan
@@ -1296,7 +1422,7 @@ async def create_department_task(request: DeptTaskCreateRequest, db: Session = D
         db.commit()
         db.refresh(new_data)
         
-        dto = DeptTaskSessionDTO.model_validate(new_data)
+        dto = DeptTaskSessionDTO.from_orm(new_data)
         karyawan = db.query(Karyawan).filter(Karyawan.nik == new_data.nik).first()
         if karyawan:
             dto.nama_petugas = karyawan.nama_karyawan
@@ -1330,7 +1456,7 @@ async def update_department_task(id: int, request: DeptTaskCreateRequest, db: Se
         db.commit()
         db.refresh(data)
         
-        dto = DeptTaskSessionDTO.model_validate(data)
+        dto = DeptTaskSessionDTO.from_orm(data)
         karyawan = db.query(Karyawan).filter(Karyawan.nik == data.nik).first()
         if karyawan:
             dto.nama_petugas = karyawan.nama_karyawan
@@ -1351,4 +1477,116 @@ async def delete_department_task(id: int, db: Session = Depends(get_db)):
         return {"status": True, "message": "Data berhasil dihapus"}
     except Exception as e:
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==========================================
+# TEAMS MONITORING
+# ==========================================
+from app.routers.master import get_full_image_url
+
+class TeamMemberMonitorDTO(BaseModel):
+    nik: str
+    nama: str
+    foto: Optional[str]
+    jabatan: Optional[str] = None
+    status_absensi: str
+    jam_masuk: Optional[str] = None
+    jam_pulang: Optional[str] = None
+    foto_masuk: Optional[str] = None
+    foto_pulang: Optional[str] = None
+    lokasi_masuk: Optional[str] = None
+
+class TeamMonitorGroupDTO(BaseModel):
+    schedule_id: int
+    kode_jam_kerja: str
+    nama_regu: Optional[str]
+    jam_mulai: str
+    jam_selesai: str
+    members: List[TeamMemberMonitorDTO]
+
+@router.get("/teams/monitoring", response_model=List[TeamMonitorGroupDTO])
+async def monitor_teams(
+    date_filter: Optional[date] = Query(None),
+    db: Session = Depends(get_db)
+):
+    try:
+        target_date = date_filter or date.today()
+        day_name_map = {
+            "Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu",
+            "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu", "Sunday": "Minggu"
+        }
+        day_name = day_name_map[target_date.strftime("%A")]
+
+        schedules = db.query(PatrolSchedules).filter(PatrolSchedules.is_active == 1).all()
+        karyawans = db.query(Karyawan).filter(Karyawan.status_aktif_karyawan == '1').all()
+        
+        overrides_date = db.query(SetJamKerjaByDate).filter(SetJamKerjaByDate.tanggal == target_date).all()
+        overrides_date_map = {x.nik: x.kode_jam_kerja for x in overrides_date}
+        
+        overrides_day = db.query(SetJamKerjaByDay).filter(SetJamKerjaByDay.hari == day_name).all()
+        overrides_day_map = {x.nik: x.kode_jam_kerja for x in overrides_day}
+        
+        presensi = db.query(Presensi).filter(Presensi.tanggal == target_date).all()
+        presensi_map = {x.nik: x for x in presensi}
+
+        groups_by_code = {}
+        for sch in schedules:
+            groups_by_code[sch.kode_jam_kerja] = {
+                "schedule_id": sch.id,
+                "kode_jam_kerja": sch.kode_jam_kerja,
+                "nama_regu": sch.name or sch.kode_jam_kerja,
+                "jam_mulai": str(sch.start_time),
+                "jam_selesai": str(sch.end_time),
+                "members": []
+            }
+            
+        for k in karyawans:
+            code = overrides_date_map.get(k.nik)
+            if not code:
+                code = overrides_day_map.get(k.nik)
+            if not code:
+                code = k.kode_jadwal
+                
+            if code and code in groups_by_code:
+                p = presensi_map.get(k.nik)
+                status = "Belum Hadir"
+                j_in, j_out, f_in, f_out, l_in = None, None, None, None, None
+                
+                if p:
+                    status = "Hadir"
+                    if p.jam_in: j_in = str(p.jam_in)
+                    if p.jam_out: j_out = str(p.jam_out)
+                    l_in = p.lokasi_in
+                    if p.foto_in: 
+                         f_in_raw = p.foto_in
+                         f_in = get_full_image_url(f_in_raw, "storage/uploads/absensi")
+                    if p.foto_out: 
+                         f_out_raw = p.foto_out
+                         f_out = get_full_image_url(f_out_raw, "storage/uploads/absensi")
+                
+                k_foto = get_full_image_url(k.foto, "storage/karyawan") if k.foto else None
+
+                member_dto = TeamMemberMonitorDTO(
+                    nik=k.nik,
+                    nama=k.nama_karyawan,
+                    foto=k_foto,
+                    jabatan=k.kode_jabatan, 
+                    status_absensi=status,
+                    jam_masuk=j_in,
+                    jam_pulang=j_out,
+                    foto_masuk=f_in,
+                    foto_pulang=f_out,
+                    lokasi_masuk=l_in
+                )
+                groups_by_code[code]["members"].append(member_dto)
+
+        response_groups = []
+        for code, group in groups_by_code.items():
+            dto = TeamMonitorGroupDTO(**group)
+            response_groups.append(dto)
+            
+        return response_groups
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

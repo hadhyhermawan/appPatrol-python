@@ -6,10 +6,12 @@ from app.models.models import PresensiIzincuti, Karyawan, Jabatan, Departemen, C
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date, datetime
+from app.core.permissions import get_current_user
 
 router = APIRouter(
     prefix="/api/izin-cuti",
     tags=["Izin Cuti"],
+    dependencies=[Depends(get_current_user)],
     responses={404: {"description": "Not found"}},
 )
 

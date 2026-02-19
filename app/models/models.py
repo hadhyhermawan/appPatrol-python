@@ -575,7 +575,7 @@ class PatrolSessions(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
-    patrol_points: Mapped[list['PatrolPoints']] = relationship('PatrolPoints', back_populates='patrol_session')
+    patrol_points: Mapped[list['PatrolPoints']] = relationship('PatrolPoints', back_populates='patrol_session', cascade="all, delete-orphan")
 
 
 class PengaturanUmum(Base):
@@ -738,6 +738,20 @@ class PresensiJamkerjaBydept(Base):
     kode_dept: Mapped[str] = mapped_column(CHAR(3), nullable=False)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    
+
+
+
+class PresensiJamkerjaBydeptDetail(Base):
+    __tablename__ = 'presensi_jamkerja_bydept_detail'
+
+    kode_jk_dept: Mapped[str] = mapped_column(CHAR(7), primary_key=True, nullable=False)
+    hari: Mapped[str] = mapped_column(String(20), primary_key=True, nullable=False)
+    kode_jam_kerja: Mapped[str] = mapped_column(CHAR(4), nullable=False)
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+
+
 
 
 class Roles(Base):
@@ -814,14 +828,16 @@ class Users(Base):
     presensi_jamkerja_bydate_extra: Mapped[list['PresensiJamkerjaBydateExtra']] = relationship('PresensiJamkerjaBydateExtra', back_populates='users')
 
 
-t_users_karyawan = Table(
-    'users_karyawan', Base.metadata,
-    Column('nik', CHAR(18), nullable=False),
-    Column('id_user', BIGINT(20), nullable=False),
-    Column('created_at', TIMESTAMP),
-    Column('updated_at', TIMESTAMP),
-    Index('users_karyawan_nik_foreign', 'nik')
-)
+class Userkaryawan(Base):
+    __tablename__ = 'users_karyawan'
+    __table_args__ = (
+        Index('users_karyawan_nik_foreign', 'nik'),
+    )
+
+    nik: Mapped[str] = mapped_column(CHAR(18), primary_key=True)
+    id_user: Mapped[int] = mapped_column(BIGINT(20), primary_key=True)
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
 
 class WalkieChannels(Base):
@@ -1274,18 +1290,8 @@ class PresensiIzincuti(Base):
 
 
 
-t_presensi_jamkerja_bydept_detail = Table(
-    'presensi_jamkerja_bydept_detail', Base.metadata,
-    Column('kode_jk_dept', CHAR(7), nullable=False),
-    Column('hari', String(255), nullable=False),
-    Column('kode_jam_kerja', CHAR(4), nullable=False),
-    Column('created_at', TIMESTAMP),
-    Column('updated_at', TIMESTAMP),
-    ForeignKeyConstraint(['kode_jam_kerja'], ['presensi_jamkerja.kode_jam_kerja'], onupdate='CASCADE', name='presensi_jamkerja_bydate_detail_kode_jam_kerja_foreign'),
-    ForeignKeyConstraint(['kode_jk_dept'], ['presensi_jamkerja_bydept.kode_jk_dept'], ondelete='CASCADE', onupdate='CASCADE', name='presensi_jamkerja_bydate_detail_kode_jk_dept_foreign'),
-    Index('presensi_jamkerja_bydate_detail_kode_jam_kerja_foreign', 'kode_jam_kerja'),
-    Index('presensi_jamkerja_bydate_detail_kode_jk_dept_foreign', 'kode_jk_dept')
-)
+# t_presensi_jamkerja_bydept_detail replaced by ORM class
+
 
 
 class SecurityReports(Base):
@@ -1830,4 +1836,18 @@ class PresensiIzinApprove(Base):
     presensi_izin: Mapped['PresensiIzin'] = relationship('PresensiIzin', back_populates='presensi_izin_approve')
 
 
+
+
+
+
+
+class PresensiJamkerjaByDeptDetail(Base):
+    __tablename__ = 'presensi_jamkerja_bydept_detail'
+    __table_args__ = {'extend_existing': True}
+    
+    kode_jk_dept: Mapped[str] = mapped_column(CHAR(7), primary_key=True)
+    hari: Mapped[str] = mapped_column(String(255), primary_key=True)
+    kode_jam_kerja: Mapped[str] = mapped_column(CHAR(4))
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
