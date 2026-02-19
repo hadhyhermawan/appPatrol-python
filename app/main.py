@@ -106,6 +106,9 @@ app_fastapi.include_router(walkie_legacy.router_node) # Node Backend Internal En
 
 from app.routers import obrolan_legacy
 app_fastapi.include_router(obrolan_legacy.router) # Android Chat Legacy
+
+from app.routers import notifications
+app_fastapi.include_router(notifications.router) # Notifications & Calls (FCM, Video)
 @app_fastapi.get("/")
 @app_fastapi.get("/api/")
 def read_root():

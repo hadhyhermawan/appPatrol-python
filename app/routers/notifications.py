@@ -1,28 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, or_, and_
 from app.database import get_db
 from app.models.models import (
     Karyawan, Presensi, Cabang, EmployeeLocations,
-    PresensiIzinabsen, PresensiIzinsakit, PresensiIzincuti, PresensiIzindinas, Lembur
+    PresensiIzinabsen, PresensiIzinsakit, PresensiIzincuti, PresensiIzindinas, Lembur,
+    KaryawanDevices, WalkieRtcMessages
 )
+from app.core.permissions import get_current_user, CurrentUser
+from pydantic import BaseModel
 from datetime import datetime, date, timedelta
 import math
+import requests
+import json
+
+# Hardcoded for now based on Laravel .env inspection
+FCM_SERVER_KEY = "AIzaSyAxxxb6jx50Ow1PiF517jglXk4kvnt6vBc"
 
 router = APIRouter(
-    prefix="/api/security/notifications",  # Updated prefix
+    prefix="/api",
     tags=["Notifications"],
     responses={404: {"description": "Not found"}},
 )
 
+# ==============================================================================
+# ORIGINAL NOTIFICATION LOGIC (Security Alerts etc)
+# ==============================================================================
+
 def get_excluded_niks(db: Session):
     """
     Get list of NIKs that should be excluded from security alerts.
-    Roles excluded:
-    1. Super Admin
-    2. Admin Departemen
-    3. Unit Pelaksana Pelayanan Pelanggan
-    4. Unit Layanan Pelanggan
     """
     excluded_roles = [
         "Super Admin", 
@@ -31,8 +38,6 @@ def get_excluded_niks(db: Session):
         "Unit Layanan Pelanggan"
     ]
     
-    # Query to fetch NIKs associated with these roles
-    # Adapting schema: Karyawan <-> users_karyawan <-> ModelHasRoles <-> Roles
     try:
         query = text("""
             SELECT uk.nik 
@@ -49,7 +54,7 @@ def get_excluded_niks(db: Session):
         print(f"Error fetching excluded NIKs: {e}")
         return []
 
-@router.get("/summary")
+@router.get("/security/notifications/summary")
 def get_notification_summary(db: Session = Depends(get_db)):
     excluded_niks = get_excluded_niks(db)
 
@@ -87,7 +92,6 @@ def get_notification_summary(db: Session = Depends(get_db)):
     mock_count = q_mock.count()
 
     # 5. Radius Violation (Active Shift & Out of Radius)
-    # Get active presensi (checked in, not checked out)
     q_active = db.query(Presensi.lokasi_in, Karyawan.nik, Cabang.lokasi_cabang, Cabang.radius_cabang) \
         .join(Karyawan, Presensi.nik == Karyawan.nik) \
         .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang) \
@@ -138,7 +142,7 @@ def get_notification_summary(db: Session = Depends(get_db)):
         "total_approval_pending": total_ajuan_absen + notifikasi_lembur
     }
 
-@router.get("/security-alerts")
+@router.get("/security/notifications/security-alerts")
 def get_security_alerts_detail(db: Session = Depends(get_db)):
     """Get Top 5 Details for each security alert category"""
     excluded_niks = get_excluded_niks(db)
@@ -163,7 +167,7 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
         "type": "FAKE_GPS"
     } for m in mocks]
 
-    # Radius Violations (Re-run logic, limited to 5)
+    # Radius Violations
     today = date.today()
     q_active = db.query(Presensi.lokasi_in, Presensi.jam_in, Karyawan.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, Cabang.lokasi_cabang, Cabang.radius_cabang) \
         .join(Karyawan, Presensi.nik == Karyawan.nik) \
@@ -181,24 +185,21 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
     if excluded_niks:
         q_active = q_active.filter(Karyawan.nik.notin_(excluded_niks))
 
-    active_presensi = q_active.limit(50).all() # Limit first to avoid heavy calc
+    active_presensi = q_active.limit(50).all()
 
     radius_data = []
     for p in active_presensi:
         try:
-            # Handle jam_in (might be datetime or time)
             time_val = None
             if p.jam_in:
                 if isinstance(p.jam_in, datetime):
                     time_val = p.jam_in
                 else: 
-                    # Assuming it is time object
                     time_val = datetime.combine(today, p.jam_in)
 
             user_lat, user_long = map(float, p.lokasi_in.split(','))
             office_lat, office_long = map(float, p.lokasi_cabang.split(','))
             
-            # Haversine Formula
             R = 6371000 
             dLat = math.radians(office_lat - user_lat)
             dLon = math.radians(office_long - user_long)
@@ -220,7 +221,6 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
                 })
                 if len(radius_data) >= 5: break
         except Exception as e:
-            print(f"Error processing radius violation for {p.nik}: {e}")
             continue
 
     # Device Logic
@@ -265,3 +265,174 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
         "device_locks": device_data,
         "member_expiring": expiring_data
     }
+
+# ==============================================================================
+# NEW NOTIFICATION LOGIC (Video Call, FCM Token)
+# ==============================================================================
+
+class StartCallRequest(BaseModel):
+    room_id: str
+    caller_name: str = None
+
+@router.post("/video-call/start")
+async def start_video_call(
+    payload: StartCallRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    room_id = payload.room_id
+    caller_name = payload.caller_name
+    
+    # FETCH NIK MANUALLY
+    nik = None
+    if current_user.username.isdigit() and len(current_user.username) > 5:
+        nik = current_user.username
+    else:
+        kary = db.query(Karyawan).filter(Karyawan.nik == current_user.username).first()
+        if kary:
+            nik = kary.nik
+            
+    sender_id = nik or current_user.username
+    
+    try:
+        print(f"DEBUG VIDEO CALL: Start requested for room {room_id} by {sender_id}")
+
+        # 1. Identify Participants
+        target_niks = []
+        
+        # A. Check if room is a defined Walkie Channel
+        from app.models.models import WalkieChannels, WalkieChannelCabangs
+        channel = db.query(WalkieChannels).filter(WalkieChannels.code == room_id).first()
+        
+        if channel:
+            # Query eligible employees
+            query = db.query(Karyawan.nik).filter(Karyawan.status_karyawan == '1')
+            
+            # Filter by Dept if specified
+            if channel.dept_members:
+                depts = [d.strip() for d in channel.dept_members.split(',')]
+                query = query.filter(Karyawan.kode_dept.in_(depts))
+                
+            # Filter by Cabang if linked
+            channel_cabangs = db.query(WalkieChannelCabangs).filter(WalkieChannelCabangs.walkie_channel_id == channel.id).all()
+            if channel_cabangs:
+                 cabangs = [cc.kode_cabang for cc in channel_cabangs]
+                 query = query.filter(Karyawan.kode_cabang.in_(cabangs))
+            
+            results = query.all()
+            target_niks = [r[0] for r in results if r[0] != sender_id]
+            print(f"DEBUG VIDEO CALL: Found {len(target_niks)} participants via Channel rules.")
+            
+        # B. Fallback to Message History
+        if not target_niks:
+            participant_niks = db.query(WalkieRtcMessages.sender_id)\
+                                 .filter(WalkieRtcMessages.room == room_id)\
+                                 .distinct().all()
+            target_niks = [row[0] for row in participant_niks if row[0] != sender_id]
+            print(f"DEBUG VIDEO CALL: Found {len(target_niks)} participants via History.")
+        
+        if not target_niks:
+            return {"status": False, "message": "No accessible participants found in this room history"}
+
+        # 2. Get FCM Tokens
+        devices = db.query(KaryawanDevices)\
+                    .filter(KaryawanDevices.nik.in_(target_niks))\
+                    .all()
+                    
+        tokens = [d.fcm_token for d in devices if d.fcm_token]
+        
+        if not tokens:
+             return {"status": False, "message": "No target devices found"}
+
+        # 3. Send FCM Notification
+        headers = {
+            "Authorization": f"key={FCM_SERVER_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        actual_caller_name = caller_name
+        if not actual_caller_name:
+            karyawan = db.query(Karyawan).filter(Karyawan.nik == sender_id).first()
+            actual_caller_name = karyawan.nama_karyawan if karyawan else current_user.username
+
+        success_count = 0
+        failure_count = 0
+        
+        for token in tokens:
+            payload = {
+                "to": token,
+                "priority": "high",
+                "data": {
+                    "type": "video_call_offer",
+                    "room": room_id,
+                    "caller_name": actual_caller_name,
+                    "ttl": "60s"
+                },
+            }
+            
+            try:
+                response = requests.post("https://fcm.googleapis.com/fcm/send", headers=headers, json=payload, timeout=5)
+                if response.status_code == 200:
+                    success_count += 1
+                else:
+                    failure_count += 1
+            except Exception as e:
+                failure_count += 1
+                
+        return {
+            "status": True, 
+            "message": f"Call started. Notified {success_count} devices.",
+            "targets": len(target_niks)
+        }
+
+    except Exception as e:
+        print(f"Error starting video call: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/firebase/token")
+async def save_fcm_token(
+    payload: dict = Body(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        token = payload.get("token") or payload.get("fcm_token")
+        if not token:
+             return {"status": False, "message": "Token missing"}
+             
+        # FETCH NIK MANUALLY
+        nik = None
+        if current_user.username.isdigit() and len(current_user.username) > 5:
+            nik = current_user.username
+        else:
+            kary = db.query(Karyawan).filter(Karyawan.nik == current_user.username).first()
+            if kary:
+                nik = kary.nik
+                
+        if not nik:
+             return {"status": False, "message": "User NIK not found"}
+
+        # Check existing
+        device = db.query(KaryawanDevices).filter(KaryawanDevices.fcm_token == token).first()
+        
+        if device:
+             if device.nik != nik:
+                 device.nik = nik
+                 device.updated_at = datetime.now()
+                 db.commit()
+        else:
+             new_device = KaryawanDevices(
+                 nik=nik,
+                 fcm_token=token,
+                 device_type='android',
+                 created_at=datetime.now(),
+                 updated_at=datetime.now()
+             )
+             db.add(new_device)
+             db.commit()
+             
+        return {"status": True, "message": "Token saved"}
+        
+    except Exception as e:
+        print(f"Error saving FCM token: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
