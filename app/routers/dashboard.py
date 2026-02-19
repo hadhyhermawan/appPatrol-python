@@ -160,12 +160,157 @@ async def get_dashboard_stats(
         
     barang_count = barang_masuk_count + barang_keluar_count
     
-    # Filter Tamu by Cabang if needed (join via nik_satpam -> karyawan -> cabang)
     if kode_cabang:
         tamu_query = tamu_query.join(Karyawan, Tamu.nik_satpam == Karyawan.nik)\
             .filter(Karyawan.kode_cabang == kode_cabang)
             
     tamu_count = tamu_query.scalar() or 0
+    
+    # 8. Chart Data: Monthly Performance Trend (Last 30 Days)
+    # Group by Date, Count Presence (H, I, S, A)
+    endDate = target_date
+    startDate = endDate - timedelta(days=29)
+    
+    chart_query = db.query(
+        func.date(Presensi.tanggal).label('date'),
+        func.sum(case((Presensi.status == 'h', 1), else_=0)).label('hadir'),
+        func.sum(case((Presensi.status.in_(['i', 's', 'c']), 1), else_=0)).label('tidak_hadir') # Izin/Sakit/Cuti
+    ).join(Karyawan, Presensi.nik == Karyawan.nik)\
+     .filter(func.date(Presensi.tanggal) >= startDate)\
+     .filter(func.date(Presensi.tanggal) <= endDate)\
+     .group_by(func.date(Presensi.tanggal))\
+     .order_by(func.date(Presensi.tanggal))
+     
+    if kode_cabang:
+        chart_query = chart_query.filter(Karyawan.kode_cabang == kode_cabang)
+    if kode_dept:
+        chart_query = chart_query.filter(Karyawan.kode_dept == kode_dept)
+        
+    chart_results = chart_query.all()
+    
+    # Format for ApexCharts (or similar)
+    chart_data = {
+        "categories": [],
+        "series": [
+            {"name": "Hadir", "data": []},
+            {"name": "Izin/Sakit", "data": []}
+        ]
+    }
+    
+    # Fill missing dates with 0
+    current_d = startDate
+    result_map = {r.date: r for r in chart_results}
+    
+    while current_d <= endDate:
+        d_str = current_d.strftime('%d %b')
+        chart_data["categories"].append(d_str)
+        
+        if current_d in result_map:
+            res = result_map[current_d]
+            chart_data["series"][0]["data"].append(int(res.hadir or 0))
+            chart_data["series"][1]["data"].append(int(res.tidak_hadir or 0))
+        else:
+            chart_data["series"][0]["data"].append(0)
+            chart_data["series"][1]["data"].append(0)
+            
+        current_d += timedelta(days=1)
+
+    # ... (existing code: Target Patroli)
+    
+    # Target Patroli (Active Schedules)
+    from app.models.models import PatrolSchedules # Ensure import is available or use existing
+    
+    target_patroli_query = db.query(func.count(PatrolSchedules.id))\
+        .filter(PatrolSchedules.is_active == 1)
+        
+    if kode_cabang:
+        target_patroli_query = target_patroli_query.filter(PatrolSchedules.kode_cabang == kode_cabang)
+    if kode_dept:
+        target_patroli_query = target_patroli_query.filter(PatrolSchedules.kode_dept == kode_dept)
+        
+    target_patroli_count = target_patroli_query.scalar() or 0
+    
+    # 7. Recent Activities (Consolidated Feed)
+    recent_activities = []
+    
+    # Fetch recent Presensi events (Last 10 updated)
+    recent_presensi = db.query(Presensi, Karyawan.nama_karyawan)\
+        .join(Karyawan, Presensi.nik == Karyawan.nik)\
+        .filter(func.date(Presensi.tanggal) == target_date)\
+        .order_by(desc(Presensi.updated_at))\
+        .limit(10)\
+        .all()
+        
+    for p, nama in recent_presensi:
+        # Check In Event
+        if p.jam_in:
+            recent_activities.append({
+                "type": "attendance",
+                "name": nama,
+                "action": "Absen Masuk",
+                "timestamp": p.jam_in, # DateTime
+                "icon": "UserCheck",
+                "color": "blue"
+            })
+            
+        # Check Out Event
+        if p.jam_out:
+            recent_activities.append({
+                "type": "attendance",
+                "name": nama,
+                "action": "Absen Pulang",
+                "timestamp": p.jam_out, # DateTime
+                "icon": "Clock",
+                "color": "purple"
+            })
+            
+    # Fetch recent Patrol events
+    recent_patrols = db.query(PatrolSessions, Karyawan.nama_karyawan)\
+        .join(Karyawan, PatrolSessions.nik == Karyawan.nik)\
+        .filter(PatrolSessions.tanggal == target_date)\
+        .order_by(desc(PatrolSessions.updated_at))\
+        .limit(10)\
+        .all()
+        
+    for p, nama in recent_patrols:
+        # Start Patrol
+        if p.jam_patrol:
+             # jam_patrol is Time, combine with date
+             dt_start = datetime.combine(p.tanggal, p.jam_patrol)
+             recent_activities.append({
+                 "type": "patrol",
+                 "name": nama,
+                 "action": "Memulai Patroli",
+                 "timestamp": dt_start,
+                 "icon": "Shield",
+                 "color": "green"
+             })
+        
+        # Finish Patrol
+        if p.status == 'complete':
+            # Use updated_at as completion time proxy
+             recent_activities.append({
+                 "type": "patrol",
+                 "name": nama,
+                 "action": "Menyelesaikan Patroli",
+                 "timestamp": p.updated_at,
+                 "icon": "Shield",
+                 "color": "green"
+             })
+             
+    # Sort by timestamp desc and take top 10
+    recent_activities.sort(key=lambda x: x['timestamp'], reverse=True)
+    final_activities = []
+    
+    for a in recent_activities[:10]:
+        final_activities.append({
+            "type": a['type'],
+            "name": a['name'],
+            "action": a['action'],
+            "timestamp": a['timestamp'].isoformat() if a['timestamp'] else None,
+            "icon": a['icon'],
+            "color": a['color']
+        })
     
     return {
         "stats": {
@@ -195,7 +340,8 @@ async def get_dashboard_stats(
             },
             "presensi_open": presensi_open_count,
             "tamu_hari_ini": tamu_count,
-            "barang_hari_ini": barang_count
+            "barang_hari_ini": barang_count,
+            "target_patroli": target_patroli_count
         },
         "top_cabang": [
             {
@@ -236,6 +382,8 @@ async def get_dashboard_stats(
             }
             for t in tidak_hadir
         ],
+        "recent_activities": final_activities,
+        "chart_data": chart_data,
         "tanggal": target_date.isoformat()
     }
 

@@ -248,6 +248,21 @@ Halaman `/security/surat` dan `/security/tamu` telah diperbarui total untuk meng
     *   **Tab Interface (Surat)**: Pemisahan data "Surat Masuk" dan "Surat Keluar" menggunakan tab navigasi yang responsif.
     *   **Advanced Filter**: Penambahan filter rentang tanggal (**Dari Tanggal** - **Sampai Tanggal**) dan pencarian teks (**Search**) di kedua halaman.
     *   **Image Preview**: Klik pada thumbnail foto akan membuka modal *lightbox* untuk melihat gambar ukuran penuh.
+
+### B. Pembaruan Modul Cleaning Tasks (Tugas Cleaning) - 19 Februari 2026
+Halaman `/cleaning/tasks` (sebelumnya CRUD sederhana) telah diperbarui total untuk menyamai standar UI/UX halaman **Security Patrol**.
+
+1.  **Frontend (UI/UX)**:
+    *   **Layout Monitoring**: Mengadopsi layout tabel "Card-like" dari Patrol, menampilkan foto personal petugas dan status tugas secara visual.
+    *   **Halaman Detail**: Penambahan halaman detail `/cleaning/tasks/[id]` yang menampilkan:
+        *   Info lengkap sesi tugas (Waktu, Petugas, Lokasi).
+        *   Daftar **Area Cleaning** (Points) beserta status pengerjaan, jam, dan foto bukti.
+        *   Peta lokasi (Google Maps link) untuk setiap area.
+    *   **Konsistensi Visual**: Penggunaan ikon `ClipboardList`, badge status warna-warni, dan modal preview gambar.
+
+2.  **Backend Enhancements**:
+    *   **GET /tasks (List)**: Pembaruan endpoint untuk mendukung format URL gambar otomatis (`STORAGE_BASE_URL`), dengan logika path dinamis: `uploads/department-task/{NIK}-{YYYYMMDD}-absen/{FILENAME}`.
+    *   **GET /tasks/{id} (Detail)**: Penambahan endpoint baru yang mengembalikan detail sesi tugas beserta relasi ke `DepartmentTaskPoints`, serta logika path gambar untuk foto absen dan foto point (`uploads/department-task/{NIK}-{YYYYMMDD}-point/{FILENAME}`).
     *   **Enhanced Form Modal**:
         *   **DatePicker**: Input tanggal/waktu yang lebih akurat.
         *   **SearchableSelect**: Pemilihan petugas satpam dengan fitur pencarian.
@@ -262,3 +277,13 @@ Backend Python telah diperbarui untuk mendukung fitur-fitur baru di frontend dan
 2.  **Date Range Filtering**:
     *   API Endpoint kini menerima parameter query `date_start` dan `date_end`.
     *   Backend melakukan filtering query database berdasarkan rentang tanggal yang diberikan, memungkinkan user mencari data arsip dengan mudah.
+
+## 11. Dokumentasi Sistem Notifikasi (Baru)
+
+Sistem notifikasi real-time yang mensinkronkan data Backend Laravel dengan Frontend Admin panel telah didokumentasikan secara terpisah.
+
+-   **Lokasi Dokumen**: `/var/www/NOTIFICATION_SYSTEM.md`
+-   **Cakupan**: Arsitektur notifikasi, Endpoint API, Integrasi Frontend, dan Troubleshooting.
+
+---
+```

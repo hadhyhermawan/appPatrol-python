@@ -151,9 +151,9 @@ async def login_android(
     access_token = create_android_token({"sub": str(user.id), "username": user.username})
 
     # 7. Siapkan WS URL (Link ke Python Socket.IO)
-    # Base URL untuk Socket.IO Client. Client akan append '/socket.io/' secara otomatis.
-    # Nginx mapping: /api-py -> /api -> Python Socket.IO mount at 'api/socket.io' matches Nginx rewrite result.
-    ws_url = f"https://frontend.k3guard.com/api-py"
+    # Walkie Talkie Raw WebSocket (Port 8081 via Nginx /walkie-ws/)
+    # Fix: Point to Raw WS, NOT Python Socket.IO
+    ws_url = f"wss://frontend.k3guard.com/walkie-ws"
     
     # 8. Last Logins (Dummy/Real)
     last_logins = []
@@ -242,3 +242,50 @@ def get_current_user_data(authorization: Optional[str] = Header(None), db: Sessi
 
     except Exception as e:
         raise HTTPException(status_code=401, detail="Token Invalid/Expired")
+
+@router.get("/validate-user")
+async def validate_user_token_endpoint(token: str, db: Session = Depends(get_db)):
+    """
+    Endpoint internal untuk Node.js Service memvalidasi token Android.
+    """
+    try:
+        # Decode Token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        username = payload.get("username")
+        
+        # Cari User Valid
+        user = db.query(Users).filter(Users.id == user_id).first()
+        if not user:
+             return {"status": False, "message": "User not found"}
+
+        # Cari Data Karyawan (NIK & Nama)
+        nik = None
+        nama = user.name
+        
+        try:
+            pivot = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user.id}).fetchone()
+            if pivot:
+                nik = pivot[0]
+                kary = db.execute(text("SELECT nama_karyawan FROM karyawan WHERE nik = :nik"), {"nik": nik}).fetchone()
+                if kary:
+                    nama = kary[0]
+            
+            # Fallback NIK dari username
+            if not nik and user.username.isdigit() and len(user.username) > 5:
+                 nik = user.username
+                 
+        except:
+            pass
+            
+        return {
+            "status": True,
+            "user": {
+                "id": user.id,
+                "nik": nik or user.username, # Penting: Walkie butuh NIK
+                "name": nama
+            }
+        }
+            
+    except Exception as e:
+        return {"status": False, "message": str(e)}

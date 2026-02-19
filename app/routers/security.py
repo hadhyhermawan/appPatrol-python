@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text, desc
 from app.database import get_db
-from app.models.models import Turlalin, Karyawan, SafetyBriefings, Barang, Tamu, PatrolSessions, PatrolSchedules, SuratMasuk, SuratKeluar, PatrolPoints, DepartmentTaskSessions, Presensi, SetJamKerjaByDay, SetJamKerjaByDate
+from app.models.models import Turlalin, Karyawan, SafetyBriefings, Barang, Tamu, PatrolSessions, PatrolSchedules, SuratMasuk, SuratKeluar, PatrolPoints, DepartmentTaskSessions, DepartmentTaskPoints, DepartmentTaskPointMaster, Presensi, SetJamKerjaByDay, SetJamKerjaByDate
 from typing import List, Optional, Any
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, date, time
 import os
 import secrets
 from fastapi.responses import FileResponse
@@ -1347,10 +1347,28 @@ class DeptTaskSessionDTO(BaseModel):
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
     
+
     nama_petugas: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+class DeptTaskPointDTO(BaseModel):
+    id: int
+    department_task_session_id: int
+    department_task_point_master_id: int
+    nama_titik: str
+    jam: Optional[time]
+    lokasi: Optional[str]
+    foto: Optional[str]
+    keterangan: Optional[str]
+    urutan: int
+    
+    class Config:
+        from_attributes = True
+
+class DeptTaskDetailDTO(DeptTaskSessionDTO):
+    points: List[DeptTaskPointDTO] = []
 
 class DeptTaskCreateRequest(BaseModel):
     nik: str
@@ -1397,6 +1415,13 @@ async def get_department_tasks(
             karyawan = db.query(Karyawan).filter(Karyawan.nik == item.nik).first()
             if karyawan:
                 dto.nama_petugas = karyawan.nama_karyawan
+            
+            # Format Image URL with Path Construction
+            if dto.foto_absen and not dto.foto_absen.startswith(('http', 'https')):
+                 date_str = item.tanggal.strftime('%Y%m%d')
+                 path = f"uploads/department-task/{item.nik}-{date_str}-absen/{dto.foto_absen}"
+                 dto.foto_absen = f"{STORAGE_BASE_URL}{path}"
+                 
             result.append(dto)
             
         return result
@@ -1464,6 +1489,69 @@ async def update_department_task(id: int, request: DeptTaskCreateRequest, db: Se
         return dto
     except Exception as e:
         db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.get("/tasks/{id}", response_model=DeptTaskDetailDTO)
+async def get_department_task_detail(id: int, db: Session = Depends(get_db)):
+    try:
+        # Fetch Session
+        data = db.query(DepartmentTaskSessions).filter(DepartmentTaskSessions.id == id).first()
+        if not data:
+            raise HTTPException(status_code=404, detail="Data Tasks tidak ditemukan")
+            
+        dto = DeptTaskDetailDTO.from_orm(data)
+        
+        # Get Officer Name
+        karyawan = db.query(Karyawan).filter(Karyawan.nik == data.nik).first()
+        if karyawan:
+            dto.nama_petugas = karyawan.nama_karyawan
+            
+        # Get Points
+        points_query = db.query(
+            DepartmentTaskPoints, 
+            DepartmentTaskPointMaster.nama_titik,
+            DepartmentTaskPointMaster.urutan
+        ).join(
+            DepartmentTaskPointMaster, 
+            DepartmentTaskPoints.department_task_point_master_id == DepartmentTaskPointMaster.id
+        ).filter(
+            DepartmentTaskPoints.department_task_session_id == id
+        ).order_by(DepartmentTaskPointMaster.urutan).all()
+        
+        points_list = []
+        for p, nama_titik, urutan in points_query:
+            point_dto = DeptTaskPointDTO(
+                id=p.id,
+                department_task_session_id=p.department_task_session_id,
+                department_task_point_master_id=p.department_task_point_master_id,
+                nama_titik=nama_titik,
+                jam=p.jam,
+                lokasi=p.lokasi,
+                foto=p.foto,
+                keterangan=p.keterangan,
+                urutan=urutan
+            )
+            
+            # Format Point Image URL
+            if point_dto.foto and not point_dto.foto.startswith(('http', 'https')):
+                 date_str = data.tanggal.strftime('%Y%m%d')
+                 path = f"uploads/department-task/{data.nik}-{date_str}-point/{point_dto.foto}"
+                 point_dto.foto = f"{STORAGE_BASE_URL}{path}"
+                 
+            points_list.append(point_dto)
+            
+        dto.points = points_list
+        
+        # Format Session Image URL
+        if dto.foto_absen and not dto.foto_absen.startswith(('http', 'https')):
+             date_str = data.tanggal.strftime('%Y%m%d')
+             path = f"uploads/department-task/{data.nik}-{date_str}-absen/{dto.foto_absen}"
+             dto.foto_absen = f"{STORAGE_BASE_URL}{path}"
+        
+        return dto
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/tasks/{id}")

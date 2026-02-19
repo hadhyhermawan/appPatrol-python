@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.database import get_db
 from app.models.models import Users
-from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy
+from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy, notifications
 
 from fastapi.staticfiles import StaticFiles
 
@@ -57,7 +57,9 @@ app_fastapi.include_router(walkie_channel.router)
 app_fastapi.include_router(general_setting.router)
 app_fastapi.include_router(jam_kerja_dept.router)
 app_fastapi.include_router(hari_libur.router)
+app_fastapi.include_router(hari_libur.router)
 app_fastapi.include_router(lembur.router)
+app_fastapi.include_router(notifications.router)
 app_fastapi.include_router(izin_absen.router)
 app_fastapi.include_router(izin_sakit.router)
 app_fastapi.include_router(izin_cuti.router)
@@ -66,6 +68,9 @@ app_fastapi.include_router(employee_tracking.router)
 app_fastapi.include_router(role_permission.router)
 app_fastapi.include_router(statistik_legacy.router)
 app_fastapi.include_router(surat_legacy.router) # Android Migration Surat
+
+from app.routers import laporan
+app_fastapi.include_router(laporan.router) # Web Report Presensi
 
 from app.routers import safety_briefing_legacy
 app_fastapi.include_router(safety_briefing_legacy.router) # Android Migration Safety Briefing
@@ -85,6 +90,12 @@ app_fastapi.include_router(monitoring_patrol_legacy.router) # Web Monitoring Pat
 
 from app.routers import monitoring_regu_legacy
 app_fastapi.include_router(monitoring_regu_legacy.router) # Web Monitoring Regu (Legacy Logic)
+
+from app.routers import violations
+app_fastapi.include_router(violations.router) # Security Violations
+
+from app.routers import walkie_legacy
+app_fastapi.include_router(walkie_legacy.router) # Android Migration Walkie Channels
 
 @app_fastapi.get("/")
 @app_fastapi.get("/api/")

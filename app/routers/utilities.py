@@ -614,7 +614,7 @@ async def get_multi_device(
                 u.name, 
                 u.email, 
                 u.username, 
-                k.kode_cabang,
+                k.kode_cabang, 
                 c.nama_cabang, 
                 COUNT(DISTINCT l.device) as device_count, 
                 GROUP_CONCAT(DISTINCT l.device ORDER BY l.device SEPARATOR '|||') as devices, 
@@ -624,16 +624,23 @@ async def get_multi_device(
             LEFT JOIN users_karyawan uk ON u.id = uk.id_user
             LEFT JOIN karyawan k ON uk.nik = k.nik
             LEFT JOIN cabang c ON k.kode_cabang = c.kode_cabang
+            LEFT JOIN login_log_device_ignores ign ON l.user_id = ign.user_id AND l.device = ign.device
             WHERE l.device IS NOT NULL
             AND l.login_at >= :from_d
             AND l.login_at <= :to_d
+            AND ign.id IS NULL
             GROUP BY u.id, u.name, u.email, u.username, k.kode_cabang, c.nama_cabang
             HAVING COUNT(DISTINCT l.device) > 1
             ORDER BY device_count DESC, last_login DESC
             LIMIT :limit
         """)
         
-        result = db.execute(sql, {"from_d": from_d, "to_d": to_d + " 23:59:59", "limit": limit}).fetchall()
+        # Determine strict date range or use string params directly if safe
+        # Ideally bind params properly
+        from_d_str = from_d
+        to_d_str = to_d + " 23:59:59"
+
+        result = db.execute(sql, {"from_d": from_d_str, "to_d": to_d_str, "limit": limit}).fetchall()
         
         data = []
         for row in result:
@@ -675,6 +682,37 @@ async def ignore_multi_device(
         db.commit()
         
         return {"message": "Device ignored successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class DeleteDeviceDTO(BaseModel):
+    user_id: int
+    device: str
+
+@router.delete("/multi-device/logs")
+async def delete_multi_device_logs(
+    # Use payload body for DELETE is often discouraged but works, or use query params.
+    # FastAPI supports body in DELETE via dependencies or distinct model, but simpler to use query for key.
+    # But let's stick to payload for consistency with 'ignore' if feasible, or query params.
+    # Actually, standard REST uses URL params for resources, but this is a complex key (id + device string).
+    # Query params are better: ?user_id=1&device=Name
+    user_id: int = Query(...),
+    device: str = Query(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Delete related login logs
+        # This removes them from the aggregation report
+        stmt = text("DELETE FROM login_logs WHERE user_id = :uid AND device = :dev")
+        result = db.execute(stmt, {"uid": user_id, "dev": device})
+        
+        # Also, check if we need to remove from karyawan_devices (registered devices)
+        # This might be tricky without NIK handy, but we can try to find NIK via user_id
+        # Let's clean up login_logs first as requested.
+        
+        db.commit()
+        return {"message": "Device logs deleted successfully"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

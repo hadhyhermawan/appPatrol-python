@@ -1124,6 +1124,8 @@ class Karyawan(Base):
     walkie_logs: Mapped[list['WalkieLogs']] = relationship('WalkieLogs', back_populates='karyawan')
     set_jam_kerja_by_day: Mapped[list['SetJamKerjaByDay']] = relationship('SetJamKerjaByDay', back_populates='karyawan')
     set_jam_kerja_by_date: Mapped[list['SetJamKerjaByDate']] = relationship('SetJamKerjaByDate', back_populates='karyawan')
+    violations: Mapped[list['Violation']] = relationship('Violation', back_populates='karyawan')
+    app_frauds: Mapped[list['AppFraud']] = relationship('AppFraud', back_populates='karyawan')
 
 
 
@@ -1850,4 +1852,37 @@ class PresensiJamkerjaByDeptDetail(Base):
     kode_jam_kerja: Mapped[str] = mapped_column(CHAR(4))
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+
+
+class Violation(Base):
+    __tablename__ = 'violations'
+
+    id: Mapped[int] = mapped_column(BIGINT(20), primary_key=True, autoincrement=True)
+    nik: Mapped[str] = mapped_column(String(20), ForeignKey('karyawan.nik'), nullable=False)
+    tanggal_pelanggaran: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    jenis_pelanggaran: Mapped[str] = mapped_column(Enum('RINGAN', 'SEDANG', 'BERAT'), nullable=False)
+    keterangan: Mapped[str] = mapped_column(Text, nullable=False)
+    sanksi: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(Enum('OPEN', 'CLOSED', 'SELESAI'), server_default=text("'OPEN'"), nullable=False)
+    bukti_foto: Mapped[Optional[str]] = mapped_column(String(255))
+    source: Mapped[str] = mapped_column(Enum('MANUAL', 'SYSTEM'), server_default=text("'MANUAL'"), nullable=False)
+    violation_type: Mapped[Optional[str]] = mapped_column(String(50)) 
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('current_timestamp()'))
+    updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('current_timestamp() ON UPDATE current_timestamp()'))
+
+    karyawan: Mapped['Karyawan'] = relationship('Karyawan', foreign_keys=[nik], back_populates='violations')
+
+
+class AppFraud(Base):
+    __tablename__ = 'app_frauds'
+
+    id: Mapped[int] = mapped_column(BIGINT(20), primary_key=True, autoincrement=True)
+    nik: Mapped[str] = mapped_column(String(20), ForeignKey('karyawan.nik'), nullable=False)
+    fraud_type: Mapped[str] = mapped_column(String(50), nullable=False) # FAKE_GPS, FORCE_CLOSE, ROOT_DEVICE
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.now)
+    created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('current_timestamp()'))
+    
+    karyawan: Mapped['Karyawan'] = relationship('Karyawan', foreign_keys=[nik], back_populates='app_frauds')
+
 

@@ -129,6 +129,50 @@ async def get_monitoring_presensi(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/presensi/{id}", response_model=PresensiItem)
+async def get_monitoring_presensi_detail(id: int, db: Session = Depends(get_db)):
+    try:
+        query = db.query(
+            Presensi,
+            Karyawan.nama_karyawan,
+            Departemen.nama_dept,
+            PresensiJamkerja.nama_jam_kerja
+        ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik)\
+         .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept)\
+         .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
+         .filter(Presensi.id == id)
+        
+        result = query.first()
+        
+        if not result:
+             raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
+             
+        presensi, nama_karyawan, nama_dept, nama_jam_kerja = result
+        
+        jin = presensi.jam_in.strftime("%H:%M:%S") if presensi.jam_in else "-"
+        # Check if jam_out is valid (not default '00:00:00' if stored as such, but usually None or Time obj)
+        jout = presensi.jam_out.strftime("%H:%M:%S") if presensi.jam_out else "-"
+        
+        return PresensiItem(
+            id=presensi.id,
+            nik=presensi.nik,
+            nama_karyawan=nama_karyawan or "Unknown",
+            nama_dept=nama_dept or "-",
+            nama_jam_kerja=nama_jam_kerja or "-",
+            jam_in=jin,
+            jam_out=jout,
+            foto_in=get_full_image_url(presensi.foto_in, "storage/uploads/absensi") if presensi.foto_in else None,
+            foto_out=get_full_image_url(presensi.foto_out, "storage/uploads/absensi") if presensi.foto_out else None,
+            lokasi_in=presensi.lokasi_in,
+            lokasi_out=presensi.lokasi_out,
+            status_kehadiran=presensi.status
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR DETAIL PRESENSI: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete("/presensi/{id}")
 async def delete_monitoring_presensi(id: int, db: Session = Depends(get_db)):
     try:
