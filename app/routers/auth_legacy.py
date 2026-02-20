@@ -9,6 +9,8 @@ from app.database import get_db
 from app.models.models import Users, Karyawan, LoginLogs, PengaturanUmum, WalkieChannels, WalkieChannelCabangs
 from app.core.security import verify_password, get_password_hash # Pakai util security yg sdh ada
 from app.core.security import SECRET_KEY, ALGORITHM # Pakai config yg sdh ada
+import hashlib
+from app.models.models import PersonalAccessTokens
 
 # Router khusus untuk Migrasi Android (Tanpa Blocking Karyawan)
 router = APIRouter(
@@ -81,6 +83,81 @@ def get_allowed_channels_helper(db: Session, nik: str):
     allowed.sort(key=lambda x: (x.priority, x.name))
     return sorted(allowed, key=lambda x: x.priority, reverse=True)
 
+
+# --- SANCTUM VALIDATION ---
+def validate_sanctum_token(db: Session, token: str):
+    """
+    Validasi Token Sanctum (Laravel Personal Access Token)
+    Format: id|random_string
+    """
+    if "|" not in token:
+        return None
+        
+    try:
+        token_id, token_value = token.split("|", 1)
+        # Cari token by ID
+        pat = db.query(PersonalAccessTokens).filter(PersonalAccessTokens.id == token_id).first()
+        if not pat:
+            return None
+            
+        # Validasi Hash (SHA256)
+        hashed_value = hashlib.sha256(token_value.encode()).hexdigest()
+        if pat.token == hashed_value:
+            # Token Valid -> Return User ID
+            return pat.tokenable_id
+            
+    except Exception as e:
+        print(f"Sanctum validation error: {e}")
+        
+    return None
+
+def get_current_user_sanctum(
+    authorization: Optional[str] = Header(None), 
+    db: Session = Depends(get_db)
+) -> CurrentUser:
+    """
+    Auth Dependency yang support JWT (Baru) DAN Sanctum (Lama/Android).
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Token Required")
+    
+    token = authorization.replace("Bearer ", "").strip()
+    user_id = None
+    username = None
+
+    # 1. Coba JWT
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        username = payload.get("username") # Bisa none klo JWT lama
+    except Exception:
+        # 2. Jika Gagal JWT, Coba Sanctum
+        user_id = validate_sanctum_token(db, token)
+        
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token Invalid/Expired")
+        
+    # Cari User Detail
+    user = db.query(Users).filter(Users.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User Not Found")
+        
+    # Cari NIK
+    nik = None
+    pivot = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user.id}).fetchone()
+    if pivot:
+        nik = pivot[0]
+        
+    # Fallback NIK
+    if not nik and user.username.isdigit() and len(user.username) > 5:
+         nik = user.username
+         
+    return CurrentUser(
+        id=user.id,
+        username=user.username,
+        nik=nik
+    )
+
 # --- ENDPOINTS ---
 
 from fastapi import Form
@@ -111,15 +188,24 @@ async def login_android(
     user = db.execute(stmt).scalars().first()
 
     if not user:
-        # Return 200 dengan status Message error (Android mengharapkan 200 OK untuk logic error kadang)
-        # Tapi best practice API adalah 401. 
-        # Mari lihat LoginResponse.kt lagi? Retrofit handle error code.
-        # Kita return 401 standard.
-        raise HTTPException(status_code=401, detail="Username atau Password salah")
-    
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "USER_NOT_FOUND", "message": "Username tidak ditemukan. Periksa kembali username Anda."}
+        )
+
     # 2. Verify Password
     if not verify_password(login_data.password, user.password):
-        raise HTTPException(status_code=401, detail="Username atau Password salah")
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "WRONG_PASSWORD", "message": "Password salah. Silakan coba lagi."}
+        )
+
+    # 3. Cek status akun (opsional jika ada field active/status)
+    if hasattr(user, 'active') and user.active == 0:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "ACCOUNT_INACTIVE", "message": "Akun Anda tidak aktif. Hubungi administrator."}
+        )
     
     # Auto-update hash jika legacy (non-bcrypt) - optional safety
     if user.password and not user.password.startswith("$2"):
@@ -340,4 +426,34 @@ async def validate_user_token_endpoint(token: str, db: Session = Depends(get_db)
         }
             
     except Exception as e:
+        # Jika JWT Gagal, Coba Fallback ke Sanctum
+        try:
+            sanctum_user_id = validate_sanctum_token(db, token)
+            if sanctum_user_id:
+                user = db.query(Users).filter(Users.id == sanctum_user_id).first()
+                if user:
+                    nik = None
+                    nama = user.name
+                    
+                    pivot = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user.id}).fetchone()
+                    if pivot:
+                        nik = pivot[0]
+                        kary = db.execute(text("SELECT nama_karyawan FROM karyawan WHERE nik = :nik"), {"nik": nik}).fetchone()
+                        if kary:
+                            nama = kary[0]
+                    
+                    if not nik and user.username.isdigit() and len(user.username) > 5:
+                        nik = user.username
+
+                    return {
+                        "status": True,
+                        "user": {
+                            "id": user.id,
+                            "nik": nik or user.username,
+                            "name": nama
+                        }
+                    }
+        except Exception as se:
+            pass
+
         return {"status": False, "message": str(e)}
