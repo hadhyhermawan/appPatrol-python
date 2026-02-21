@@ -81,4 +81,18 @@ Semua tangkapan foto Wajah (`in/out`) dari Android/Kamera akan dikirim dan disim
 
 Kemudian rincian jalannya (_Path_) ini disuntik ke tabel Transaksi `presensi` di kolom `foto_in` maupun `foto_out`.
 
+## 5. Tata Kelola Data Perizinan (Sakit, Cuti, Izin, Dinas)
+Karyawan yang berhalangan hadir memiliki alur data khusus yang diproses melalui _Approval_ (Persetujuan) oleh pimpinan di Website Admin. Sistem menanganinya dengan dua layer pencatatan:
+
+1. **Tabel Pengajuan Spesifik**: Saat Karyawan mengajukan Izin/Cuti, sistem menampungnya di tabel formulir seperti `presensi_izinabsen`, `presensi_izincuti`, `presensi_izindinas`, atau `presensi_izinsakit`. Semua tabel ini memiliki kolom rentang _dari_ hingga _sampai_ serta kolom status persetujuan (`status` bernilai `1` jika **Disetujui**).
+2. **Injeksi Langsung ke Tabel `presensi`**: Ketika Izin/Sakit telah resmi disetujui, rutinitas _Backend_ akan langsung memplot/_inject_ baris transaksi kehadiran Karyawan ke tabel utama `presensi` dengan cara memaksa kolom `status` menjadi abjad/flag perizinan:
+   - `i` = Izin Absen
+   - `s` = Sakit
+   - `c` = Cuti
+   - `d` = Dinas Luar
+
+**Dampak pada API Android (`/api/android/absensi/hariini`)**:
+- Komponen API akan membaca kode abjad tersebut dari tabel `presensi` milik hari itu dan mengembalikan indikator status `I` / `S` / `C` / `D` (Bukan sekadar `H` Hadir atau `A` Alpa) ke layar HP/Dashboard karyawan.
+- Aplikasi Android dan API `absen` telah diprogram untuk memblokir secara paksa apabila ada Karyawan yang iseng menekan layar "Check-In" saat data mereka di server sudah dilabeli berhalangan hadir (*_Throw Error Alert: "Anda tidak dapat absen, status hari ini: IZIN/SAKIT"_*).  
+
 `(Dokumentasi dihasilkan dan ditulis otomatis oleh Asisten Antigravity pada 21/02/2026)`
