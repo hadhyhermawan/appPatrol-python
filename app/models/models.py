@@ -26,8 +26,8 @@ class Barang(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
-    barang_keluar: Mapped[list['BarangKeluar']] = relationship('BarangKeluar', back_populates='barang')
-    barang_masuk: Mapped[list['BarangMasuk']] = relationship('BarangMasuk', back_populates='barang')
+    barang_keluar: Mapped[list['BarangKeluar']] = relationship('BarangKeluar', back_populates='barang', cascade='all, delete-orphan')
+    barang_masuk: Mapped[list['BarangMasuk']] = relationship('BarangMasuk', back_populates='barang', cascade='all, delete-orphan')
 
 
 class Cabang(Base):
