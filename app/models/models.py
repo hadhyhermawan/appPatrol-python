@@ -601,6 +601,8 @@ class PengaturanUmum(Base):
     batasi_hari_izin: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text('1'))
     jml_hari_izin_max: Mapped[int] = mapped_column(INTEGER(11), nullable=False)
     batas_presensi_lintashari: Mapped[datetime.time] = mapped_column(Time, nullable=False, server_default=text("'08:00:00'"))
+    toleransi_shift_malam_mulai: Mapped[datetime.time] = mapped_column(Time, nullable=False, server_default=text("'20:00:00'"))
+    toleransi_shift_malam_batas: Mapped[datetime.time] = mapped_column(Time, nullable=False, server_default=text("'06:00:00'"))
     enable_face_block_system: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text('1'))
     face_block_limit: Mapped[int] = mapped_column(INTEGER(11), nullable=False, server_default=text('3'))
     face_check_liveness_limit: Mapped[int] = mapped_column(INTEGER(11), nullable=False, server_default=text('3'))

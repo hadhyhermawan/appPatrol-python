@@ -39,6 +39,8 @@ class GeneralSettingDTO(BaseModel):
     batasi_hari_izin: int
     jml_hari_izin_max: int
     batas_presensi_lintashari: time
+    toleransi_shift_malam_mulai: time
+    toleransi_shift_malam_batas: time
     enable_face_block_system: int
     face_block_limit: int
     face_check_liveness_limit: int
@@ -83,6 +85,8 @@ async def update_general_setting(
     batasi_hari_izin: int = Form(0),
     jml_hari_izin_max: int = Form(...),
     batas_presensi_lintashari: str = Form(...), # Time string HH:MM:SS
+    toleransi_shift_malam_mulai: str = Form(...), # Time string HH:MM:SS
+    toleransi_shift_malam_batas: str = Form(...), # Time string HH:MM:SS
     enable_face_block_system: int = Form(0),
     face_block_limit: int = Form(3),
     face_check_liveness_limit: int = Form(3),
@@ -124,8 +128,14 @@ async def update_general_setting(
     try:
         hour, minute, second = map(int, batas_presensi_lintashari.split(':'))
         setting.batas_presensi_lintashari = time(hour, minute, second)
+        
+        hour_m, minute_m, second_m = map(int, toleransi_shift_malam_mulai.split(':'))
+        setting.toleransi_shift_malam_mulai = time(hour_m, minute_m, second_m)
+        
+        hour_b, minute_b, second_b = map(int, toleransi_shift_malam_batas.split(':'))
+        setting.toleransi_shift_malam_batas = time(hour_b, minute_b, second_b)
     except ValueError:
-         raise HTTPException(status_code=400, detail="Invalid time format for batas_presensi_lintashari. Use HH:MM:SS")
+         raise HTTPException(status_code=400, detail="Invalid time format. Use HH:MM:SS")
 
     setting.enable_face_block_system = enable_face_block_system
     setting.face_block_limit = face_block_limit
