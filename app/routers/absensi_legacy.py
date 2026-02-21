@@ -101,6 +101,19 @@ async def get_presensi_hari_ini(
     now_wib = datetime.now(WIB)
     today = now_wib.date()
     
+    # Logic Toleransi Awal (Early Check-In / Shift Malam Next Day)
+    from datetime import time
+    if now_wib.time() >= time(20, 0):
+        # Pastikan tidak ada shift hari ini yang masih gantung (belum absen pulang)
+        active_today = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.jam_out == None).first()
+        if not active_today:
+            tomorrow = today + timedelta(days=1)
+            jam_kerja_tmrw, _ = determine_jam_kerja_hari_ini(db, nik, tomorrow, now_wib)
+            # Jika besok ada shift yang dimulai dini hari (misal jam 00:00 sampai 06:00),
+            # maka anggap "hari ini" adalah shift besok tersebut agar bisa absen.
+            if jam_kerja_tmrw and jam_kerja_tmrw.jam_masuk <= time(6, 0):
+                today = tomorrow
+
     from app.models.models import Karyawan, Cabang, KaryawanWajah, PengaturanUmum
     karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
     if not karyawan:
@@ -181,6 +194,18 @@ async def absen(
     
     if not is_masuk and not is_pulang:
          raise HTTPException(status_code=400, detail=f"Status absen tidak valid: {status}")
+
+    # Logic Toleransi Awal (Early Check-In / Shift Malam Next Day)
+    from datetime import time
+    if is_masuk and now.time() >= time(20, 0):
+        # Jika malam hari mau absen masuk, cek apakah shift hari ini masih ada yg belum tutup
+        active_today = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.jam_out == None).first()
+        if not active_today:
+            tomorrow = today + timedelta(days=1)
+            jam_kerja_tmrw, _ = determine_jam_kerja_hari_ini(db, nik, tomorrow, now)
+            # Jika besok ada jadwal dini hari <= 06:00, kita ubah object today menjadi tomorrow
+            if jam_kerja_tmrw and jam_kerja_tmrw.jam_masuk <= time(6, 0):
+                today = tomorrow
     
     # 1. Save Image
     # Filename format: {nik}-{date}-{in/out}.ext (Match Laravel)
