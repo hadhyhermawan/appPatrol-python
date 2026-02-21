@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, File, Query
 from pydantic import BaseModel
 from typing import Optional, List, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import desc, func, or_, text
 import shutil
@@ -29,6 +29,13 @@ router = APIRouter(
 STORAGE_BARANG = "/var/www/appPatrol/storage/app/public/barang"
 os.makedirs(STORAGE_BARANG, exist_ok=True)
 
+# Timezone WIB (UTC+7)
+WIB = timezone(timedelta(hours=7))
+
+def now_wib() -> datetime:
+    """Waktu sekarang dalam WIB (UTC+7), tanpa info timezone (naive) untuk kompatibilitas DB."""
+    return datetime.now(WIB).replace(tzinfo=None)
+
 # --- HELPER FUNCTIONS FOR SHIFT VALIDATION (Copied from Tamu Legacy for Isolation) ---
 
 def get_jam_kerja_karyawan(db: Session, nik: str, kode_cabang: str, kode_dept: str):
@@ -39,8 +46,8 @@ def get_jam_kerja_karyawan(db: Session, nik: str, kode_cabang: str, kode_dept: s
     2. By Day (Hari dalam seminggu)
     3. By Dept (Jadwal default departemen)
     """
-    tanggal = datetime.now().strftime('%Y-%m-%d')
-    hari_ini = datetime.now().strftime('%a') # Mon, Tue, ...
+    tanggal = now_wib().strftime('%Y-%m-%d')
+    hari_ini = now_wib().strftime('%a') # Mon, Tue, ...
     
     # Map English day to Indonesian
     days_map = {
@@ -218,7 +225,7 @@ async def list_barang(
         ORDER BY (bk.tgl_jam_keluar IS NULL) DESC, bm.tgl_jam_masuk DESC
     """)
 
-    one_month_ago = datetime.now() - timedelta(days=30)
+    one_month_ago = now_wib() - timedelta(days=30)
     result = db.execute(sql, {"kode_cabang": kode_cabang, "one_month_ago": one_month_ago}).fetchall()
 
     data = []
@@ -280,8 +287,8 @@ async def store_barang(
         dari=dari,
         untuk=untuk,
         image=image_path,
-        created_at=datetime.now(),
-        updated_at=datetime.now()
+        created_at=now_wib(),
+        updated_at=now_wib()
     )
     db.add(new_barang)
     db.commit()
@@ -291,7 +298,7 @@ async def store_barang(
     bm = BarangMasuk(
         id_barang=new_barang.id_barang,
         nik_satpam=user.nik,
-        tgl_jam_masuk=datetime.now()
+        tgl_jam_masuk=now_wib()
     )
     db.add(bm)
     db.commit()
@@ -356,7 +363,7 @@ async def barang_keluar(
         nik_penyerah=user.nik,
         nama_penerima=nama_penerima,
         no_handphone=no_handphone,
-        tgl_jam_keluar=datetime.now()
+        tgl_jam_keluar=now_wib()
     )
     db.add(bk)
     db.commit()
