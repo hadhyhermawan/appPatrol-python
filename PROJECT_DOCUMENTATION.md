@@ -28,3 +28,10 @@
 - **Issue**: Due to poor network conditions, if an image fails to load initially in `TamuCardStack.kt` (e.g. guest avatar or clicked preview), the photo frame would turn blank with no way for users to manually trigger a retry. Users were forced to navigate outside the page and return just to trigger a recomposition.
 - **Solution**: Refactored `AsyncImage` into `SubcomposeAsyncImage` provided by the Coil Compose package. Implemented a `loading` indicator state and an interactive `error` layout featuring a refresh icon. When network fails, the refresh icon prompts users to literally "hit reload", modifying a local URL query parameter suffix (`?retry=SystemTime`) directly, thereby bypassing Coil's local broken cache natively within the view and restarting the image retrieval without needing to leave the screen.
 - **Status**: Tested, pushed to github `main`.
+
+## 25. Menyelaraskan UI "Barang/Paket" dengan "Tamu" (Android)
+- **Komponen List**: Diperbarui dari `BarangCardStacked` lama menjadi gaya tampilan card minimalis yang sama dengan Tamu (dengan status bar/aksen vertikal, avatar bula, & font senada).
+- **SubcomposeAsyncImage**: Thumbnail foto Barang kini punya kapabilitas memuat ulang secara mandiri lewat sentuhan ikon **"Refresh (Tap Reload)"** bila di-klik layaknya Tamu.
+- **Warna & Aksi Tombol**: Mengubah _Floating Action Button_ untuk Tambah (+) dan merombak tombol "Ambil Barang" tampilannya identik kuat (Warna Hijau Green) bersama icon *log out*.
+- **Camera Viewfinder**: Kamera untuk menu "Tambah Barang" maupun "Barang Keluar" sekarang ditarik utuh dari _CameraPreview_ milik Tamu Component, sehingga kini _UI Camera_ untuk memindai barang tampil identik dengan Kamera Wajah Tamu (Ada efek tombol kedip _pulse_, lensa bundar elegan).
+- **Validasi No HP Penerima**: Limit panjang di _BarangKeluarScreen_ selaras dengan Tamu yakni 11 hingga 13 digit.
