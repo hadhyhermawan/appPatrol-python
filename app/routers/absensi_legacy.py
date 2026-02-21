@@ -152,7 +152,7 @@ async def get_presensi_hari_ini(
         # Presensi Data
         "jam_in": presensi.jam_in.strftime("%H:%M:%S") if presensi and presensi.jam_in else None,
         "jam_out": presensi.jam_out.strftime("%H:%M:%S") if presensi and presensi.jam_out else None,
-        "status": "H" if presensi else "A",
+        "status": str(presensi.status).upper() if presensi and presensi.status else ("H" if presensi else "A"),
         "foto_in": presensi.foto_in if presensi else None,
         "foto_out": presensi.foto_out if presensi else None,
         "lokasi_in": presensi.lokasi_in if presensi else None,
@@ -160,8 +160,8 @@ async def get_presensi_hari_ini(
         "wajah_terdaftar": wajah_terdaftar,
         
         # Logic Flags
-        "absen_masuk_selesai": True if (presensi and presensi.jam_in) else False,
-        "absen_pulang_selesai": True if (presensi and presensi.jam_out) else False,
+        "absen_masuk_selesai": True if (presensi and presensi.jam_in) or (presensi and presensi.status and presensi.status.lower() != 'h' and presensi.status.lower() != 'a') else False,
+        "absen_pulang_selesai": True if (presensi and presensi.jam_out) or (presensi and presensi.status and presensi.status.lower() != 'h' and presensi.status.lower() != 'a') else False,
         "tombol_enabled": True, # Logic handled by app usually, but we enable by default
         "lock_location": True if str(karyawan.lock_location) == '1' else False,
         "lock_jam_kerja": True if str(karyawan.lock_jam_kerja) == '1' else False,
@@ -235,6 +235,8 @@ async def absen(
         # Check existing
         existing = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
         if existing:
+            if existing.status and existing.status.lower() not in ['h', 'a']:
+                raise HTTPException(status_code=400, detail=f"Anda tidak dapat absen, status hari ini: {existing.status.upper()}")
             raise HTTPException(status_code=400, detail="Anda sudah absen masuk hari ini.")
         
         # TENTUKAN SCHEDULE TERBAIK (JIKA KOSONG/NS DARI FRONTEND)
