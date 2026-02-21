@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, F
 from pydantic import BaseModel
 from typing import Optional, List, Any
 from datetime import datetime
+import pytz
+
+WIB = pytz.timezone('Asia/Jakarta')
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 import shutil
@@ -142,6 +145,7 @@ async def store_turlalin_masuk(
     nomor_polisi: str = Form(...),
     keterangan: str = Form(""),
     foto: UploadFile = File(...),
+    jam_masuk: Optional[str] = Form(None),
     user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
@@ -160,11 +164,16 @@ async def store_turlalin_masuk(
     with open(path, "wb") as buffer:
         shutil.copyfileobj(foto.file, buffer)
         
+    if jam_masuk:
+        jam_masuk_wib = jam_masuk
+    else:
+        jam_masuk_wib = datetime.now(WIB).replace(tzinfo=None)
+        
     new_data = Turlalin(
         nik=user.nik,
         nomor_polisi=nomor_polisi,
         keterangan=keterangan,
-        jam_masuk=datetime.now(),
+        jam_masuk=jam_masuk_wib,
         foto=f"turlalin/{filename}"
     )
     db.add(new_data)
@@ -195,6 +204,7 @@ async def store_turlalin_masuk(
 async def store_turlalin_keluar(
     id: int = Form(...),
     foto_keluar: UploadFile = File(None),
+    jam_keluar: Optional[str] = Form(None),
     user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
@@ -219,7 +229,12 @@ async def store_turlalin_keluar(
             shutil.copyfileobj(foto_keluar.file, buffer)
         data.foto_keluar = f"turlalin/{filename}"
         
-    data.jam_keluar = datetime.now()
+    if jam_keluar:
+        jam_keluar_wib = jam_keluar
+    else:
+        jam_keluar_wib = datetime.now(WIB).replace(tzinfo=None)
+        
+    data.jam_keluar = jam_keluar_wib
     data.nik_keluar = user.nik
     
     db.commit()
