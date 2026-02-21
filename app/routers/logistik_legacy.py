@@ -60,8 +60,8 @@ async def store_tamu(
     bertemu_dengan: str = Form("", alias="bertemuDengan"),
     dengan_perjanjian: str = Form("TIDAK", alias="dp"), # Repository sends 'dp'
     keperluan: str = Form(""),
-    jenis_kendaraan: str = Form("PEJALAN KAKI", alias="jk"), # Repository sends 'jk' alias? Check logic.
-    no_pol: str = Form("", alias="noPol"),
+    jenis_kendaraan: str = Form("PEJALAN KAKI"),  # Android kirim 'jenis_kendaraan'
+    no_pol: str = Form(""),                        # Android kirim 'no_pol'
     foto: UploadFile = File(...),
     kode_jam_kerja: str = Form(None), 
     user: CurrentUser = Depends(get_current_user_data),

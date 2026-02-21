@@ -7,15 +7,28 @@ from app.models.models import (
     PresensiIzinabsen, PresensiIzinsakit, PresensiIzincuti, PresensiIzindinas, Lembur,
     KaryawanDevices, WalkieRtcMessages
 )
-from app.core.permissions import get_current_user, CurrentUser
+from app.core.permissions import get_current_user
+# from app.core.permissions import CurrentUser # Legacy uses different CurrentUser model
+from app.routers.auth_legacy import get_current_user_sanctum, CurrentUser # Use legacy auth for Sanctum support
 from pydantic import BaseModel
 from datetime import datetime, date, timedelta
 import math
 import requests
 import json
+import firebase_admin
+from firebase_admin import credentials, messaging
 
-# Hardcoded for now based on Laravel .env inspection
-FCM_SERVER_KEY = "AIzaSyAxxxb6jx50Ow1PiF517jglXk4kvnt6vBc"
+# Initialize Firebase Admin SDK
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate("/var/www/appPatrol-python/serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+    print("Firebase Admin SDK Initialized")
+except Exception as e:
+    print(f"Failed to initialize Firebase Admin SDK: {e}")
+
+# FCM_SERVER_KEY removed as we use service account now
+
 
 router = APIRouter(
     prefix="/api",
@@ -277,7 +290,7 @@ class StartCallRequest(BaseModel):
 @router.post("/video-call/start")
 async def start_video_call(
     payload: StartCallRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user_sanctum),
     db: Session = Depends(get_db)
 ):
     room_id = payload.room_id
@@ -306,7 +319,8 @@ async def start_video_call(
         
         if channel:
             # Query eligible employees
-            query = db.query(Karyawan.nik).filter(Karyawan.status_karyawan == '1')
+            # Query eligible employees (Updated: allow all active status codes like 'K', 'T', '1')
+            query = db.query(Karyawan.nik)
             
             # Filter by Dept if specified
             if channel.dept_members:
@@ -319,6 +333,7 @@ async def start_video_call(
                  cabangs = [cc.kode_cabang for cc in channel_cabangs]
                  query = query.filter(Karyawan.kode_cabang.in_(cabangs))
             
+            results = query.all()
             results = query.all()
             target_niks = [r[0] for r in results if r[0] != sender_id]
             print(f"DEBUG VIDEO CALL: Found {len(target_niks)} participants via Channel rules.")
@@ -334,21 +349,28 @@ async def start_video_call(
         if not target_niks:
             return {"status": False, "message": "No accessible participants found in this room history"}
 
-        # 2. Get FCM Tokens
-        devices = db.query(KaryawanDevices)\
-                    .filter(KaryawanDevices.nik.in_(target_niks))\
-                    .all()
+        # 2. Get FCM Tokens - Only latest token per NIK to avoid stale/expired tokens
+        from sqlalchemy import func
+        # Subquery: get latest updated_at per nik
+        latest_subq = db.query(
+            KaryawanDevices.nik,
+            func.max(KaryawanDevices.updated_at).label('max_updated')
+        ).filter(KaryawanDevices.nik.in_(target_niks)).group_by(KaryawanDevices.nik).subquery()
+        
+        devices = db.query(KaryawanDevices).join(
+            latest_subq,
+            (KaryawanDevices.nik == latest_subq.c.nik) &
+            (KaryawanDevices.updated_at == latest_subq.c.max_updated)
+        ).all()
                     
         tokens = [d.fcm_token for d in devices if d.fcm_token]
+        # Map token -> device id for cleanup
+        token_to_device_id = {d.fcm_token: d.id for d in devices if d.fcm_token}
         
         if not tokens:
              return {"status": False, "message": "No target devices found"}
 
-        # 3. Send FCM Notification
-        headers = {
-            "Authorization": f"key={FCM_SERVER_KEY}",
-            "Content-Type": "application/json"
-        }
+        # 3. Send FCM Notification (Using Firebase Admin SDK)
         
         actual_caller_name = caller_name
         if not actual_caller_name:
@@ -358,30 +380,66 @@ async def start_video_call(
         success_count = 0
         failure_count = 0
         
-        for token in tokens:
-            payload = {
-                "to": token,
-                "priority": "high",
-                "data": {
-                    "type": "video_call_offer",
-                    "room": room_id,
-                    "caller_name": actual_caller_name,
-                    "ttl": "60s"
-                },
-            }
-            
+        # Prepare Message
+        # Note: Android high priority is better handled by 'data' payload for background processing
+        # but 'android' config can also specific priority.
+        
+        # Split tokens into chunks of 500 (Multicast limit)
+        def chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
+
+        for token_batch in chunks(tokens, 500):
             try:
-                response = requests.post("https://fcm.googleapis.com/fcm/send", headers=headers, json=payload, timeout=5)
-                if response.status_code == 200:
-                    success_count += 1
-                else:
-                    failure_count += 1
+                msg = messaging.MulticastMessage(
+                    data={
+                        "type": "video_call_offer",
+                        "room": room_id,
+                        "caller_name": actual_caller_name,
+                        "ttl": "60s"
+                    },
+                    tokens=token_batch,
+                    android=messaging.AndroidConfig(
+                        priority='high',
+                        ttl=timedelta(seconds=60) # 60 seconds TTL
+                    )
+                )
+                
+                response = messaging.send_each_for_multicast(msg)
+                success_count += response.success_count
+                failure_count += response.failure_count
+                
+                print(f"🔥 FCM BATCH RESULT: Success={response.success_count}, Failed={response.failure_count}")
+                
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success:
+                            # Tampilkan Error Detail dari Firebase
+                            err = resp.exception
+                            token_failed = token_batch[idx]
+                            print(f"🔥 FCM ERROR for token {token_failed[:10]}... : {err}")
+                            if hasattr(err, 'cause'): print(f"   CAUSE: {err.cause}")
+                            if hasattr(err, 'code'): print(f"   CODE: {err.code}")
+                            if hasattr(err, 'http_response'): print(f"   HTTP: {err.http_response}")
+                            
+                            # Auto-delete token invalid (NOT_FOUND) dari DB
+                            error_code = getattr(err, 'code', '')
+                            if error_code in ('NOT_FOUND', 'registration-token-not-registered', 'INVALID_ARGUMENT'):
+                                device_id = token_to_device_id.get(token_failed)
+                                if device_id:
+                                    print(f"🗑️ Deleting stale token from DB: device_id={device_id}")
+                                    stale = db.query(KaryawanDevices).filter(KaryawanDevices.id == device_id).first()
+                                    if stale:
+                                        db.delete(stale)
+                                        db.commit()
+
             except Exception as e:
-                failure_count += 1
+                print(f"Error sending batch notification: {e}")
+                failure_count += len(token_batch)
                 
         return {
             "status": True, 
-            "message": f"Call started. Notified {success_count} devices.",
+            "message": f"Call started. Notified {success_count} devices. Failed: {failure_count}",
             "targets": len(target_niks)
         }
 
@@ -436,3 +494,15 @@ async def save_fcm_token(
     except Exception as e:
         print(f"Error saving FCM token: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Create a secondary router to handle /api/android prefix requests from the Android app
+router_android = APIRouter(
+    prefix="/api/android",
+    tags=["Notifications (Android)"],
+    responses={404: {"description": "Not found"}},
+)
+
+# Re-register the same endpoints on the new router (Function reuse)
+router_android.post("/video-call/start")(start_video_call)
+router_android.post("/firebase/token")(save_fcm_token)
+

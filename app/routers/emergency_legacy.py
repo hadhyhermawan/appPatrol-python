@@ -28,9 +28,58 @@ async def trigger_emergency(
     db: Session = Depends(get_db)
 ):
     if not user.nik:
-         # EmergencyAlerts requires NIK column
-         raise HTTPException(400, "User tidak memiliki NIK valid utk emergency.")
-    
+        raise HTTPException(400, "User tidak memiliki NIK valid untuk emergency.")
+
+    # 1. Cek absen masuk aktif (konsisten dengan fitur operasional lainnya)
+    from datetime import date, timedelta
+    from app.models.models import Presensi
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
+    presensi_aktif = db.query(Presensi).filter(
+        Presensi.nik == user.nik,
+        Presensi.tanggal == today,
+        Presensi.jam_in != None,
+        Presensi.jam_out == None
+    ).first()
+
+    if not presensi_aktif:
+        # Cek lintas hari
+        presensi_aktif = db.query(Presensi).filter(
+            Presensi.nik == user.nik,
+            Presensi.tanggal == yesterday,
+            Presensi.lintashari == 1,
+            Presensi.jam_in != None,
+            Presensi.jam_out == None
+        ).first()
+
+    if not presensi_aktif:
+        raise HTTPException(status_code=403, detail="Anda belum absen masuk atau sudah absen pulang.")
+
+    # 2. Cooldown: cegah spam trigger (60 detik)
+    cooldown_seconds = 60
+    recent = db.query(EmergencyAlerts).filter(
+        EmergencyAlerts.nik == user.nik
+    ).order_by(desc(EmergencyAlerts.triggered_at)).first()
+
+    if recent and recent.triggered_at:
+        elapsed = (datetime.now() - recent.triggered_at).total_seconds()
+        if elapsed < cooldown_seconds:
+            retry_after = int(cooldown_seconds - elapsed)
+            return {
+                "status": False,
+                "message": f"Harap tunggu {retry_after} detik sebelum mengirim alarm lagi.",
+                "retry_after": retry_after
+            }
+
+    # 3. Ambil nama cabang dari karyawan
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
+    branch_name = ""
+    if karyawan:
+        from app.models.models import Cabang
+        cabang = db.query(Cabang).filter(Cabang.kode_cabang == req.branch_code).first()
+        branch_name = cabang.nama_cabang if cabang and hasattr(cabang, 'nama_cabang') else (karyawan.nama_cabang if hasattr(karyawan, 'nama_cabang') else "")
+
     new_alert = EmergencyAlerts(
         id_user=user.id,
         nik=user.nik,
@@ -45,28 +94,29 @@ async def trigger_emergency(
     db.add(new_alert)
     db.commit()
     db.refresh(new_alert)
-    
-    # Broadcast Socket (Unified Realtime)
-    # Emit to all clients or specific room 'security'
+
+    # Broadcast Socket
     await sio_server.emit("emergency_broadcast", {
-         "id": new_alert.id,
-         "type": req.alarm_type,
-         "lokasi": req.location,
-         "branch": req.branch_code,
-         "user": user.username,
-         "nik": user.nik,
-         "timestamp": str(datetime.now())
+        "id": new_alert.id,
+        "type": req.alarm_type,
+        "lokasi": req.location,
+        "branch": req.branch_code,
+        "branch_name": branch_name,
+        "user": user.username,
+        "nik": user.nik,
+        "timestamp": str(datetime.now())
     })
-    
+
     return {
         "status": True,
-        "message": "Alarm Terkirim",
+        "message": "Alarm darurat berhasil dikirim!",
         "alarm_id": new_alert.id,
         "branch_code": req.branch_code,
-        "branch_name": "", # Optional
+        "branch_name": branch_name,
         "alarm_type": req.alarm_type,
-        "retry_after": 0
+        "retry_after": cooldown_seconds
     }
+
 
 @router.get("/emergency/logs")
 async def get_emergency_logs(

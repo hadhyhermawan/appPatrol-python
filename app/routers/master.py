@@ -845,6 +845,7 @@ async def delete_jamkerja(
 class PatrolScheduleDTO(BaseModel):
     id: int
     kode_jam_kerja: str
+    name: Optional[str] = None
     start_time: time
     end_time: time
     kode_dept: Optional[str]
@@ -857,24 +858,12 @@ class PatrolScheduleDTO(BaseModel):
 
 class PatrolScheduleCreateRequest(BaseModel):
     kode_jam_kerja: str
-    start_time: str
-    end_time: str
+    name: Optional[str] = None
+    start_time: Any
+    end_time: Any
     kode_dept: Optional[str] = None
     kode_cabang: Optional[str] = None
     is_active: int = 1
-
-    @validator('start_time', 'end_time', pre=True)
-    def parse_time(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, str):
-            try:
-                if len(v.split(':')) == 2:
-                    return datetime.strptime(v, '%H:%M').time()
-                return datetime.strptime(v, '%H:%M:%S').time()
-            except ValueError:
-                return v
-        return v
 
 @router.get("/patrol-schedules", response_model=List[PatrolScheduleDTO])
 async def get_patrol_schedules(
@@ -907,6 +896,7 @@ async def create_patrol_schedule(request: PatrolScheduleCreateRequest, db: Sessi
 
         new_data = PatrolSchedules(
             kode_jam_kerja=request.kode_jam_kerja,
+            name=request.name,
             start_time=to_time(request.start_time),
             end_time=to_time(request.end_time),
             kode_dept=request.kode_dept,
@@ -940,6 +930,7 @@ async def update_patrol_schedule(id: int, request: PatrolScheduleCreateRequest, 
             return val
 
         data.kode_jam_kerja = request.kode_jam_kerja
+        data.name = request.name
         data.start_time = to_time(request.start_time)
         data.end_time = to_time(request.end_time)
         data.kode_dept = request.kode_dept

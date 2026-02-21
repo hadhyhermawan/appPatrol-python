@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Form, File, UploadFile, Request, Body, Query, Path
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, text
+from sqlalchemy import desc, func, text, distinct
 from app.database import get_db
 from app.models.models import Karyawan, WalkieRtcMessages, Users
 from app.core.permissions import get_current_user
+from app.core.fcm import send_chat_notification
 from datetime import datetime
-import shutil, os, secrets
+import shutil, os, secrets, asyncio
 from typing import Optional, List, Dict, Any, Union
 
 router = APIRouter(
@@ -160,9 +161,39 @@ async def send_message(request: Request, db: Session = Depends(get_db)):
         db.add(new_msg)
         db.commit()
         db.refresh(new_msg)
-        
+
+        # 🔔 KIRIM PUSH NOTIFICATION ke peserta lain di room
+        try:
+            # Ambil daftar NIK peserta lain yang pernah chat di room ini
+            other_niks_result = db.query(WalkieRtcMessages.sender_id).filter(
+                WalkieRtcMessages.room == room,
+                WalkieRtcMessages.sender_id != sender_id,
+                WalkieRtcMessages.sender_id.isnot(None)
+            ).distinct().all()
+
+            other_niks = [r[0] for r in other_niks_result if r[0]]
+
+            if other_niks:
+                preview = message or ("📎 Mengirim foto" if attachment_type == "image" else "📎 Mengirim video" if attachment_type == "video" else "📎 Mengirim file")
+                # Ambil nama asli pengirim dari karyawan jika ada
+                karyawan = db.query(Karyawan).filter(Karyawan.nik == sender_id).first()
+                nama_pengirim = karyawan.nama_karyawan if karyawan else (sender_nama or sender_id)
+
+                # Kirim notif di background (non-blocking)
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None,
+                    lambda: send_chat_notification(other_niks, nama_pengirim, preview, room, db)
+                )
+                print(f"[FCM CHAT] Memulai push notif ke {len(other_niks)} NIK | room={room}")
+            else:
+                print(f"[FCM CHAT] Tidak ada NIK lain di room {room}")
+        except Exception as fcm_err:
+            # Jangan gagalkan request hanya karena notifikasi gagal
+            print(f"[FCM CHAT] Error push notif (non-fatal): {fcm_err}")
+
         return format_response(True, "Pesan terkirim", {"id": new_msg.id})
-        
+
     except Exception as e:
         print(f"Error sending message: {e}")
         return format_response(False, str(e), None)

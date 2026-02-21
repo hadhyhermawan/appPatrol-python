@@ -118,44 +118,11 @@ def get_jam_kerja_karyawan(db: Session, nik: str, kode_cabang: str, kode_dept: s
 
 def check_jam_kerja_status(db: Session, karyawan: Karyawan):
     """
-    Validasi apakah karyawan sedang dalam jam kerja atau sudah absen
+    Validasi ketat: karyawan HARUS memiliki shift, HARUS sudah absen masuk, BELUM absen pulang,
+    dan HARUS berada di dalam rentang waktu jam kerjanya.
     """
-    # 1. Cek Presensi Hari Ini (Sudah absen masuk & belum pulang)
-    today = datetime.now().strftime('%Y-%m-%d')
-    presensi = db.query(Presensi).filter(
-        Presensi.nik == karyawan.nik,
-        Presensi.tanggal == today,
-        Presensi.jam_in != None,
-        Presensi.jam_out == None
-    ).first()
-    
-    if presensi:
-        return {"status": True}
-        
-    # 2. Jika belum absen, cek apakah masih dalam range jam kerja shift?
-    jam_kerja = get_jam_kerja_karyawan(db, karyawan.nik, karyawan.kode_cabang, karyawan.kode_dept)
-    
-    if not jam_kerja:
-        return {"status": False, "message": "Anda tidak memiliki jadwal shift hari ini."}
-        
-    # Check time range
-    now = datetime.now()
-    try:
-        date_str = now.strftime('%Y-%m-%d')
-        start_dt = datetime.strptime(f"{date_str} {jam_kerja.jam_masuk}", "%Y-%m-%d %H:%M:%S")
-        end_dt = datetime.strptime(f"{date_str} {jam_kerja.jam_pulang}", "%Y-%m-%d %H:%M:%S")
-        
-        if end_dt < start_dt:
-            end_dt += timedelta(days=1)
-            
-        if now < start_dt or now > end_dt:
-             return {"status": False, "message": f"Anda sedang di luar jam kerja ({jam_kerja.jam_masuk} - {jam_kerja.jam_pulang})"}
-             
-    except Exception as e:
-        logger.error(f"Error parsing shift time: {e}")
-        pass
-        
-    return {"status": True}
+    from app.routers.tamu_legacy import check_jam_kerja_status as _check
+    return _check(db, karyawan)
 
 def save_compressed_image(upload_file: UploadFile, prefix: str):
     filename = f"{prefix}_{uuid.uuid4().hex[:6]}.jpg"
@@ -189,7 +156,7 @@ def save_compressed_image(upload_file: UploadFile, prefix: str):
 
 @router.get("/barang")
 async def list_barang(
-    limit: int = 20, # Not actually used in Laravel, but useful.
+    limit: int = 20,
     user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
@@ -197,26 +164,20 @@ async def list_barang(
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
     if not karyawan:
         return {"status": False, "message": "Data karyawan tidak ditemukan"}
-        
+
+    # 2. Cek shift aktif (konsisten dengan Tamu)
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        return {
+            "status": True,
+            "message": shift_check["message"],
+            "nik_satpam": karyawan.nik,
+            "kode_cabang": karyawan.kode_cabang,
+            "data": []
+        }
+
     kode_cabang = karyawan.kode_cabang
-    
-    # 2. Logic: Barang Masuk vs Barang Keluar
-    # Laravel uses subquery logic:
-    # Latest Masuk (tgl_jam_masuk DESC group by id_barang)
-    # Latest Keluar (tgl_jam_keluar DESC group by id_barang)
-    # Then Join Barang + Latest Masuk + Latest Keluar
-    # Filter: tgl_jam_masuk > 1 month OR tgl_jam_keluar IS NULL
-    
-    # In Pure SQLAlchemy ORM this is hard. Let's use clean SQL or careful joins.
-    # Since Barang and BarangMasuk relations are 1-to-many? No, actually 1-to-MaybeMany?
-    # Usually: 1 Barang -> 1 Entry attempt?
-    # Schema check: barang_masuk has id_barang FK.
-    
-    # Let's simplify. We can query on Barang table and join Relations if defined.
-    # If not defined, we use manual query.
-    
-    # Using raw SQL for complex join is safer to match Laravel 100%
-    
+
     sql = text("""
         SELECT 
             b.id_barang,
@@ -256,31 +217,17 @@ async def list_barang(
         
         ORDER BY (bk.tgl_jam_keluar IS NULL) DESC, bm.tgl_jam_masuk DESC
     """)
-    # Note on Order By: Laravel `orderByRaw('bk.tgl_jam_keluar IS NULL ASC')`
-    # IS NULL -> 1 (True) or 0 (False) depends on DB.
-    # MariaDB: IS NULL returns 1 if NULL, 0 if NOT NULL.
-    # ASC: 0 (Not Null/Completed) then 1 (Null/Active). So Active at BOTTOM?
-    # Wait, usually Active at TOP.
-    # If Laravel says ASC, and list shows Active top, then logic might be reversed or I misunderstand MariaDB.
-    # Let's assume user wants Active (Null) at Top.
-    # (bk.tgl_jam_keluar IS NULL) -> 1. DESC -> 1 first. Active first.
-    
+
     one_month_ago = datetime.now() - timedelta(days=30)
-    
     result = db.execute(sql, {"kode_cabang": kode_cabang, "one_month_ago": one_month_ago}).fetchall()
-    
+
     data = []
     base_url = "https://frontend.k3guard.com/api-py/storage/"
 
     for row in result:
-        # Row is tuple-like
-        # We need to access by index or key? SQLAlchemy result is addressable by key in recent versions.
-        # Let's try converting to dict
         r = row._mapping
-        
         foto_masuk = f"{base_url}{r['foto_masuk']}" if r['foto_masuk'] else None
         foto_keluar = f"{base_url}{r['foto_keluar']}" if r['foto_keluar'] else None
-        
         data.append({
             "id_barang": r['id_barang'],
             "jenis_barang": r['jenis_barang'],
@@ -297,7 +244,7 @@ async def list_barang(
             "nama_penerima": r['nama_penerima'],
             "no_handphone": r['no_handphone']
         })
-        
+
     return {
         "status": True,
         "nik_satpam": karyawan.nik,
@@ -348,14 +295,29 @@ async def store_barang(
     )
     db.add(bm)
     db.commit()
-    
+    db.refresh(new_barang)
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_masuk_url = f"{base_url}{new_barang.image}" if new_barang.image else None
+
     return {
         "status": True,
         "message": "Barang berhasil dicatat masuk",
         "data": {
             "id_barang": new_barang.id_barang,
             "jenis_barang": new_barang.jenis_barang,
-            # Add fields if needed
+            "dari": new_barang.dari,
+            "untuk": new_barang.untuk,
+            "tgl_jam_masuk": str(bm.tgl_jam_masuk),
+            "tgl_jam_ambil": None,
+            "foto_masuk": foto_masuk_url,
+            "foto_keluar": None,
+            "nik_satpam": user.nik,
+            "nama_satpam": karyawan.nama_karyawan,
+            "nik_penyerah": None,
+            "nama_penyerah": None,
+            "nama_penerima": None,
+            "no_handphone": None
         }
     }
 
@@ -398,15 +360,29 @@ async def barang_keluar(
     )
     db.add(bk)
     db.commit()
-    
-    # 6. Fetch updated data for response (optional)
-    
+    db.refresh(bk)
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_keluar_url = f"{base_url}{foto_keluar_path}" if foto_keluar_path else None
+    foto_masuk_url = f"{base_url}{barang.image}" if barang.image else None
+
     return {
         "status": True,
         "message": "Barang berhasil dicatat keluar",
         "data": {
-            "id_barang": id_barang,
+            "id_barang": barang.id_barang,
+            "jenis_barang": barang.jenis_barang,
+            "dari": barang.dari,
+            "untuk": barang.untuk,
+            "tgl_jam_masuk": None,
+            "tgl_jam_ambil": str(bk.tgl_jam_keluar),
+            "foto_masuk": foto_masuk_url,
+            "foto_keluar": foto_keluar_url,
+            "nik_satpam": None,
+            "nama_satpam": None,
+            "nik_penyerah": user.nik,
+            "nama_penyerah": karyawan.nama_karyawan,
             "nama_penerima": nama_penerima,
-            "tgl_jam_keluar": str(bk.tgl_jam_keluar)
+            "no_handphone": no_handphone
         }
     }

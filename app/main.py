@@ -1,14 +1,56 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
+from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from apscheduler.schedulers.background import BackgroundScheduler
+import logging
+
+logging.basicConfig(level=logging.INFO)
 from app.database import get_db
 from app.models.models import Users
-from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy, notifications
+from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy, notifications, reminder
 
 from fastapi.staticfiles import StaticFiles
 
 import socketio
 from app.sio import sio as sio_server
+
+# ─── Reminder Scheduler ───────────────────────────────────────────────────
+_scheduler = BackgroundScheduler(timezone="Asia/Jakarta")
+
+@asynccontextmanager
+async def lifespan(app):
+    """Start APScheduler on startup, stop on shutdown."""
+    from app.services.reminder_scheduler import run_reminder_check
+    from app.services.auto_close_presensi import run_auto_close_presensi
+
+    # Reminder: setiap 1 menit
+    _scheduler.add_job(
+        run_reminder_check,
+        trigger='interval',
+        minutes=1,
+        id='reminder_check',
+        replace_existing=True,
+        max_instances=1
+    )
+
+    # Auto-close lupa absen pulang: setiap 5 menit
+    _scheduler.add_job(
+        run_auto_close_presensi,
+        trigger='interval',
+        minutes=5,
+        id='auto_close_presensi',
+        replace_existing=True,
+        max_instances=1
+    )
+
+    _scheduler.start()
+    logging.getLogger("reminder_scheduler").info("✅ Reminder Scheduler started (every 1 minute)")
+    logging.getLogger("auto_close_presensi").info("✅ Auto-Close Presensi started (every 5 minutes)")
+    yield
+    _scheduler.shutdown(wait=False)
+    logging.getLogger("reminder_scheduler").info("🛑 Scheduler stopped")
+
 
 # Initialize FastAPI App
 app_fastapi = FastAPI(
@@ -16,7 +58,8 @@ app_fastapi = FastAPI(
     description="Backend API migrated from Laravel/Node.js to Python FastAPI + Socket.IO",
     version="2.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # Debug Middleware: Log all requests
@@ -74,6 +117,7 @@ app_fastapi.include_router(employee_tracking.router)
 app_fastapi.include_router(role_permission.router)
 app_fastapi.include_router(statistik_legacy.router)
 app_fastapi.include_router(surat_legacy.router) # Android Migration Surat
+app_fastapi.include_router(reminder.router)     # Reminder Settings CRUD
 
 from app.routers import laporan
 app_fastapi.include_router(laporan.router) # Web Report Presensi
@@ -109,6 +153,7 @@ app_fastapi.include_router(obrolan_legacy.router) # Android Chat Legacy
 
 from app.routers import notifications
 app_fastapi.include_router(notifications.router) # Notifications & Calls (FCM, Video)
+app_fastapi.include_router(notifications.router_android) # Notifications & Calls (FCM, Video) - Android Prefix
 @app_fastapi.get("/")
 @app_fastapi.get("/api/")
 def read_root():

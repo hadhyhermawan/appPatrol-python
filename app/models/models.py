@@ -818,13 +818,13 @@ class Users(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
     berita: Mapped[list['Berita']] = relationship('Berita', back_populates='users')
-    driver_p2h: Mapped[list['DriverP2h']] = relationship('DriverP2h', back_populates='user')
-    login_log_device_ignores: Mapped[list['LoginLogDeviceIgnores']] = relationship('LoginLogDeviceIgnores', foreign_keys='[LoginLogDeviceIgnores.created_by]', back_populates='users')
-    login_log_device_ignores_: Mapped[list['LoginLogDeviceIgnores']] = relationship('LoginLogDeviceIgnores', foreign_keys='[LoginLogDeviceIgnores.user_id]', back_populates='user')
-    login_logs: Mapped[list['LoginLogs']] = relationship('LoginLogs', back_populates='user')
+    driver_p2h: Mapped[list['DriverP2h']] = relationship('DriverP2h', back_populates='user', passive_deletes=True)
+    login_log_device_ignores: Mapped[list['LoginLogDeviceIgnores']] = relationship('LoginLogDeviceIgnores', foreign_keys='[LoginLogDeviceIgnores.created_by]', back_populates='users', passive_deletes=True)
+    login_log_device_ignores_: Mapped[list['LoginLogDeviceIgnores']] = relationship('LoginLogDeviceIgnores', foreign_keys='[LoginLogDeviceIgnores.user_id]', back_populates='user', passive_deletes=True)
+    login_logs: Mapped[list['LoginLogs']] = relationship('LoginLogs', back_populates='user', passive_deletes=True)
     security_reports: Mapped[list['SecurityReports']] = relationship('SecurityReports', back_populates='user')
-    driver_job_orders: Mapped[list['DriverJobOrders']] = relationship('DriverJobOrders', back_populates='user')
-    emergency_alerts: Mapped[list['EmergencyAlerts']] = relationship('EmergencyAlerts', back_populates='users')
+    driver_job_orders: Mapped[list['DriverJobOrders']] = relationship('DriverJobOrders', back_populates='user', passive_deletes=True)
+    emergency_alerts: Mapped[list['EmergencyAlerts']] = relationship('EmergencyAlerts', back_populates='users', passive_deletes=True)
     presensi_jamkerja_bydate_extra: Mapped[list['PresensiJamkerjaBydateExtra']] = relationship('PresensiJamkerjaBydateExtra', back_populates='users')
 
 
@@ -974,7 +974,7 @@ class DriverP2h(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
     kendaraan: Mapped['MasterKendaraan'] = relationship('MasterKendaraan', back_populates='driver_p2h')
-    user: Mapped['Users'] = relationship('Users', back_populates='driver_p2h')
+    user: Mapped['Users'] = relationship('Users', back_populates='driver_p2h', passive_deletes=True)
     driver_energy_logs: Mapped[list['DriverEnergyLogs']] = relationship('DriverEnergyLogs', back_populates='p2h')
     driver_job_orders: Mapped[list['DriverJobOrders']] = relationship('DriverJobOrders', back_populates='p2h')
     driver_reimbursements: Mapped[list['DriverReimbursements']] = relationship('DriverReimbursements', back_populates='p2h')
@@ -1110,7 +1110,7 @@ class Karyawan(Base):
     jabatan: Mapped['Jabatan'] = relationship('Jabatan', back_populates='karyawan')
     barang_keluar: Mapped[list['BarangKeluar']] = relationship('BarangKeluar', back_populates='karyawan')
     barang_masuk: Mapped[list['BarangMasuk']] = relationship('BarangMasuk', back_populates='karyawan')
-    emergency_alerts: Mapped[list['EmergencyAlerts']] = relationship('EmergencyAlerts', back_populates='karyawan')
+    emergency_alerts: Mapped[list['EmergencyAlerts']] = relationship('EmergencyAlerts', back_populates='karyawan', passive_deletes=True)
     karyawan_devices: Mapped[list['KaryawanDevices']] = relationship('KaryawanDevices', back_populates='karyawan')
     pengunjung: Mapped[list['Pengunjung']] = relationship('Pengunjung', back_populates='karyawan')
     presensi_izin: Mapped[list['PresensiIzin']] = relationship('PresensiIzin', back_populates='karyawan')
@@ -1151,8 +1151,8 @@ class LoginLogDeviceIgnores(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
-    users: Mapped[Optional['Users']] = relationship('Users', foreign_keys=[created_by], back_populates='login_log_device_ignores')
-    user: Mapped['Users'] = relationship('Users', foreign_keys=[user_id], back_populates='login_log_device_ignores_')
+    users: Mapped[Optional['Users']] = relationship('Users', foreign_keys=[created_by], back_populates='login_log_device_ignores', passive_deletes=True)
+    user: Mapped['Users'] = relationship('Users', foreign_keys=[user_id], back_populates='login_log_device_ignores_', passive_deletes=True)
 
 
 class LoginLogs(Base):
@@ -1172,7 +1172,7 @@ class LoginLogs(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
-    user: Mapped['Users'] = relationship('Users', back_populates='login_logs')
+    user: Mapped['Users'] = relationship('Users', back_populates='login_logs', passive_deletes=True)
 
 
 class ModelHasRoles(Base):
@@ -1447,7 +1447,7 @@ class DriverJobOrders(Base):
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
     p2h: Mapped[Optional['DriverP2h']] = relationship('DriverP2h', back_populates='driver_job_orders')
-    user: Mapped['Users'] = relationship('Users', back_populates='driver_job_orders')
+    user: Mapped['Users'] = relationship('Users', back_populates='driver_job_orders', passive_deletes=True)
 
 
 class DriverReimbursements(Base):
@@ -1494,8 +1494,8 @@ class EmergencyAlerts(Base):
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
 
-    users: Mapped['Users'] = relationship('Users', back_populates='emergency_alerts')
-    karyawan: Mapped['Karyawan'] = relationship('Karyawan', back_populates='emergency_alerts')
+    users: Mapped['Users'] = relationship('Users', back_populates='emergency_alerts', passive_deletes=True)
+    karyawan: Mapped['Karyawan'] = relationship('Karyawan', back_populates='emergency_alerts', passive_deletes=True)
 
 
 t_hari_libur_detail = Table(
@@ -1886,3 +1886,23 @@ class AppFraud(Base):
     karyawan: Mapped['Karyawan'] = relationship('Karyawan', foreign_keys=[nik], back_populates='app_frauds')
 
 
+class ReminderSettings(Base):
+    """
+    Konfigurasi reminder yang dikelola admin dari backend.
+    Scheduler membaca tabel ini setiap menit untuk menentukan
+    apakah perlu mengirim push notification FCM ke user.
+    """
+    __tablename__ = 'reminder_settings'
+
+    id:             Mapped[int]           = mapped_column(BIGINT(20, unsigned=True), primary_key=True, autoincrement=True)
+    type:           Mapped[str]           = mapped_column(String(50), nullable=False)
+    label:          Mapped[str]           = mapped_column(String(100), nullable=False, server_default=text("'Pengingat'"))
+    message:        Mapped[str]           = mapped_column(String(255), nullable=False)
+    minutes_before: Mapped[int]           = mapped_column(SMALLINT(), nullable=False, server_default=text("'30'"))
+    target_role:    Mapped[Optional[str]] = mapped_column(String(50))   # satpam|cleaning|driver|NULL=semua
+    target_dept:    Mapped[Optional[str]] = mapped_column(String(50))   # kode_dept, NULL=semua
+    target_cabang:  Mapped[Optional[str]] = mapped_column(String(50))   # kode_cabang, NULL=semua
+    target_shift:   Mapped[Optional[str]] = mapped_column(String(10))   # kode_jam_kerja, NULL=semua
+    is_active:      Mapped[int]           = mapped_column(TINYINT(1), nullable=False, server_default=text("'1'"))
+    created_at:     Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)
+    updated_at:     Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP)

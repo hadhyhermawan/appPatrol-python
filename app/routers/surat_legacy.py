@@ -29,30 +29,41 @@ def get_nama_hari(d: date):
 def get_jam_kerja_karyawan(nik, kode_cabang, kode_dept, db: Session):
     today = date.today()
     namahari = get_nama_hari(today)
-    
-    # By DATE
-    # Note: SetJamKerjaByDate/Day were renamed/refactored in prev steps.
+
+    # 0. By DATE EXTRA (Lembur / Double Shift) — Prioritas tertinggi
+    try:
+        from app.models.models import PresensiJamkerjaBydateExtra
+        jk_extra = db.query(PresensiJamkerja)\
+            .join(PresensiJamkerjaBydateExtra, PresensiJamkerjaBydateExtra.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
+            .filter(PresensiJamkerjaBydateExtra.nik == nik)\
+            .filter(PresensiJamkerjaBydateExtra.tanggal == today)\
+            .first()
+        if jk_extra:
+            return jk_extra
+    except Exception:
+        pass
+
+    # 1. By DATE (Tukar Shift / Rotasi)
     jk_date = db.query(SetJamKerjaByDate).filter(SetJamKerjaByDate.nik == nik, SetJamKerjaByDate.tanggal == today).first()
     if jk_date:
         return db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == jk_date.kode_jam_kerja).first()
-        
-    # By DAY
+
+    # 2. By DAY (Jadwal Rutin Personal)
     jk_day = db.query(SetJamKerjaByDay).filter(SetJamKerjaByDay.nik == nik, SetJamKerjaByDay.hari == namahari).first()
     if jk_day:
         return db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == jk_day.kode_jam_kerja).first()
-        
-    # By DEPT
-    # Logic mirror of PHP
+
+    # 3. By DEPT (Jadwal Default Departemen)
     jk_dept = db.query(PresensiJamkerjaByDeptDetail)\
         .join(PresensiJamkerjaBydept, PresensiJamkerjaByDeptDetail.kode_jk_dept == PresensiJamkerjaBydept.kode_jk_dept)\
         .filter(PresensiJamkerjaBydept.kode_cabang == kode_cabang)\
         .filter(PresensiJamkerjaBydept.kode_dept == kode_dept)\
         .filter(PresensiJamkerjaByDeptDetail.hari == namahari)\
         .first()
-        
+
     if jk_dept:
         return db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == jk_dept.kode_jam_kerja).first()
-        
+
     return None
 
 def check_sedang_bertugas(nik: str, db: Session):
@@ -130,18 +141,16 @@ async def surat_masuk(
     if not user_karyawan: raise HTTPException(404, "Relasi UserKaryawan not found")
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
     if not karyawan: raise HTTPException(404, "Karyawan not found")
-    
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        return {"status": True, "kode_cabang": karyawan.kode_cabang, "data": []}
+
     kode_cabang = karyawan.kode_cabang
     now = datetime.now()
-    last_month = now - timedelta(days=30) # approx subMonth
-    
-    # Query
-    # Join surat_masuk with karyawan (satpam)
-    # Filter by kode_cabang (via satpam.kode_cabang)
-    # Filter date range OR null accepted
-    
-    # Note: Karyawan -> Satpam join
-    
+    last_month = now - timedelta(days=30)
+
     q = db.query(SuratMasuk, Karyawan.nama_karyawan.label("nama_satpam"))\
         .outerjoin(Karyawan, SuratMasuk.nik_satpam == Karyawan.nik)\
         .filter(Karyawan.kode_cabang == kode_cabang)\
@@ -150,21 +159,16 @@ async def surat_masuk(
             SuratMasuk.tanggal_diterima == None
         ))\
         .order_by(text("surat_masuk.tanggal_diterima IS NULL ASC"), SuratMasuk.id.desc())
-        
+
     results = q.all()
-    
     data = []
     for sm, nama_satpam in results:
-        # Construct url
-        foto_url = None
-        if sm.foto:
-            foto_url = f"https://frontend.k3guard.com/api-py/storage/{sm.foto}" 
-            
+        foto_url = f"https://frontend.k3guard.com/api-py/storage/{sm.foto}" if sm.foto else None
         sm_dict = {c.name: getattr(sm, c.name) for c in sm.__table__.columns}
-        sm_dict['nama_karyawan'] = nama_satpam # key matches PHP response
+        sm_dict['nama_karyawan'] = nama_satpam
         sm_dict['foto_url'] = foto_url
         data.append(sm_dict)
-        
+
     return {
         "status": True,
         "kode_cabang": kode_cabang,
@@ -182,13 +186,11 @@ async def tambah_surat_masuk(
 ):
     user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
-    
-    # 🛡️ PRODUKSI SAFE: prioritas presensi, fallback ke jam kerja
-    presensi = check_sedang_bertugas(karyawan.nik, db)
-    if not presensi:
-        cek = check_jam_kerja(karyawan, db)
-        if not cek['status']:
-             raise HTTPException(status_code=403, detail=cek['message'])
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        raise HTTPException(status_code=403, detail=shift_check["message"])
              
     # Logic
     nik = karyawan.nik
@@ -216,8 +218,34 @@ async def tambah_surat_masuk(
     db.add(new_sm)
     db.commit()
     db.refresh(new_sm)
-    
-    return {"status": True, "data": new_sm}
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = f"{base_url}{new_sm.foto}" if new_sm.foto else None
+
+    return {
+        "status": True,
+        "message": "Surat masuk berhasil disimpan",
+        "data": {
+            "id": new_sm.id,
+            "nomor_surat": new_sm.nomor_surat,
+            "tanggal_surat": str(new_sm.tanggal_surat),
+            "asal_surat": new_sm.asal_surat,
+            "tujuan_surat": new_sm.tujuan_surat,
+            "perihal": new_sm.perihal,
+            "foto": new_sm.foto,
+            "foto_url": foto_url,
+            "nik_satpam": new_sm.nik_satpam,
+            "nik_satpam_pengantar": new_sm.nik_satpam_pengantar,
+            "status_surat": new_sm.status_surat,
+            "tanggal_update": str(new_sm.tanggal_update) if new_sm.tanggal_update else None,
+            "status_penerimaan": getattr(new_sm, 'status_penerimaan', None),
+            "tanggal_diterima": None,
+            "nama_satpam": karyawan.nama_karyawan,
+            "nama_pengantar": None,
+            "nama_penerima": None,
+            "no_penerima": None
+        }
+    }
 
 @router.post("/suratmasuk/status/{id}")
 async def update_surat_masuk(
@@ -230,13 +258,11 @@ async def update_surat_masuk(
 ):
     user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
-    
-    # Check Shift
-    presensi = check_sedang_bertugas(karyawan.nik, db)
-    if not presensi:
-        cek = check_jam_kerja(karyawan, db)
-        if not cek['status']:
-             raise HTTPException(status_code=403, detail=cek['message'])
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        raise HTTPException(status_code=403, detail=shift_check["message"])
              
     sm = db.query(SuratMasuk).filter(SuratMasuk.id == id).first()
     if not sm: raise HTTPException(404, "Surat Masuk not found")
@@ -255,7 +281,38 @@ async def update_surat_masuk(
         sm.foto_penerima = foto_path
         
     db.commit()
-    return {"status": True}
+    db.refresh(sm)
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = f"{base_url}{sm.foto}" if sm.foto else None
+    foto_penerima_url = f"{base_url}{sm.foto_penerima}" if getattr(sm, 'foto_penerima', None) else None
+
+    return {
+        "status": True,
+        "message": "Status surat berhasil diperbarui",
+        "data": {
+            "id": sm.id,
+            "nomor_surat": sm.nomor_surat,
+            "tanggal_surat": str(sm.tanggal_surat),
+            "asal_surat": sm.asal_surat,
+            "tujuan_surat": sm.tujuan_surat,
+            "perihal": sm.perihal,
+            "foto": sm.foto,
+            "foto_url": foto_url,
+            "foto_penerima": getattr(sm, 'foto_penerima', None),
+            "foto_penerima_url": foto_penerima_url,
+            "nik_satpam": sm.nik_satpam,
+            "nik_satpam_pengantar": sm.nik_satpam_pengantar,
+            "status_surat": sm.status_surat,
+            "tanggal_update": str(sm.tanggal_update) if sm.tanggal_update else None,
+            "status_penerimaan": getattr(sm, 'status_penerimaan', None),
+            "tanggal_diterima": str(sm.tanggal_diterima) if sm.tanggal_diterima else None,
+            "nama_satpam": karyawan.nama_karyawan,
+            "nama_pengantar": karyawan.nama_karyawan,
+            "nama_penerima": sm.nama_penerima,
+            "no_penerima": sm.no_penerima
+        }
+    }
 
 # ===============================================
 # SURAT KELUAR
@@ -266,21 +323,25 @@ async def surat_keluar(
     current_user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
-    # Logic similar to surat masuk
     user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
+    if not karyawan: raise HTTPException(404, "Karyawan not found")
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        return {"status": True, "data": []}
+
     kode_cabang = karyawan.kode_cabang
     now = datetime.now()
     last_month = now - timedelta(days=30)
-    
-    from sqlalchemy.orm import aliased
 
-    # Aliases
+    from sqlalchemy.orm import aliased
     Satpam = aliased(Karyawan)
     Pengantar = aliased(Karyawan)
-    
+
     q = db.query(
-        SuratKeluar, 
+        SuratKeluar,
         Satpam.nama_karyawan.label("nama_satpam"),
         Pengantar.nama_karyawan.label("nama_pengantar")
     )\
@@ -292,19 +353,17 @@ async def surat_keluar(
             SuratKeluar.tanggal_diterima == None
         ))\
         .order_by(text("surat_keluar.tanggal_diterima IS NULL ASC"), SuratKeluar.id.desc())
-        
+
     results = q.all()
-    
     data = []
     for sk, n_satpam, n_pengantar in results:
         foto_url = f"https://frontend.k3guard.com/api-py/storage/{sk.foto}" if sk.foto else None
-        
         sk_dict = {c.name: getattr(sk, c.name) for c in sk.__table__.columns}
         sk_dict['nama_satpam'] = n_satpam
         sk_dict['nama_pengantar'] = n_pengantar
         sk_dict['foto_url'] = foto_url
         data.append(sk_dict)
-        
+
     return {
         "status": True,
         "data": data
@@ -313,22 +372,19 @@ async def surat_keluar(
 @router.post("/suratkeluar/store")
 async def tambah_surat_keluar(
     tujuan_surat: str = Form(...),
-    perihal: Optional[str] = Form(None), # Not required in PHP validation but used in insert?
+    perihal: Optional[str] = Form(None),
     foto: Optional[UploadFile] = File(None),
     current_user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
-    # PHP: validate(['tujuan_surat'=>'required']) - perihal not required? 
-    # But in insert: 'perihal'=>$request->perihal. If null, might fail if column not nullable.
-    # Model SuratKeluar: perihal is NOT NULL. So it should be required.
-    
     user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
-    
-    # PHP doesn't check shift for surat keluar store? 
-    # Logic in `tambahSuratKeluar` (lines 241-270) DOES NOT call cekSedangBertugas.
-    # So I wont either.
-    
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        raise HTTPException(status_code=403, detail=shift_check["message"])
+
     nomor = f"SK{datetime.now().strftime('%Y%m%d')}{random.randint(100, 999)}"
     
     foto_path = None
@@ -348,8 +404,34 @@ async def tambah_surat_keluar(
     db.add(new_sk)
     db.commit()
     db.refresh(new_sk)
-    
-    return {"status": True, "data": new_sk}
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = f"{base_url}{new_sk.foto}" if new_sk.foto else None
+
+    return {
+        "status": True,
+        "message": "Surat keluar berhasil disimpan",
+        "data": {
+            "id": new_sk.id,
+            "nomor_surat": new_sk.nomor_surat,
+            "tanggal_surat": str(new_sk.tanggal_surat),
+            "tujuan_surat": new_sk.tujuan_surat,
+            "perihal": new_sk.perihal,
+            "foto": new_sk.foto,
+            "foto_url": foto_url,
+            "foto_penerima": None,
+            "nik_satpam": new_sk.nik_satpam,
+            "nik_satpam_pengantar": None,
+            "nama_satpam": karyawan.nama_karyawan,
+            "nama_pengantar": None,
+            "nama_penerima": None,
+            "no_penerima": None,
+            "status_surat": new_sk.status_surat,
+            "status_penerimaan": None,
+            "tanggal_update": None,
+            "tanggal_diterima": None
+        }
+    }
 
 @router.post("/suratkeluar/status/{id}")
 async def update_surat_keluar(
@@ -362,7 +444,12 @@ async def update_surat_keluar(
 ):
     user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
     karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
-    
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        raise HTTPException(status_code=403, detail=shift_check["message"])
+
     sk = db.query(SuratKeluar).filter(SuratKeluar.id == id).first()
     if not sk: raise HTTPException(404, "Surat Keluar not found")
     
@@ -384,4 +471,34 @@ async def update_surat_keluar(
         sk.foto_penerima = foto_path
         
     db.commit()
-    return {"status": True}
+    db.refresh(sk)
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = f"{base_url}{sk.foto}" if sk.foto else None
+    foto_penerima_url = f"{base_url}{sk.foto_penerima}" if getattr(sk, 'foto_penerima', None) else None
+
+    return {
+        "status": True,
+        "message": "Status surat keluar berhasil diperbarui",
+        "data": {
+            "id": sk.id,
+            "nomor_surat": sk.nomor_surat,
+            "tanggal_surat": str(sk.tanggal_surat),
+            "tujuan_surat": sk.tujuan_surat,
+            "perihal": sk.perihal,
+            "foto": sk.foto,
+            "foto_url": foto_url,
+            "foto_penerima": getattr(sk, 'foto_penerima', None),
+            "foto_penerima_url": foto_penerima_url,
+            "nik_satpam": sk.nik_satpam,
+            "nik_satpam_pengantar": sk.nik_satpam_pengantar,
+            "nama_satpam": karyawan.nama_karyawan,
+            "nama_pengantar": karyawan.nama_karyawan,
+            "nama_penerima": sk.nama_penerima,
+            "no_penerima": sk.no_penerima,
+            "status_surat": sk.status_surat,
+            "status_penerimaan": getattr(sk, 'status_penerimaan', None),
+            "tanggal_update": str(sk.tanggal_update) if sk.tanggal_update else None,
+            "tanggal_diterima": str(sk.tanggal_diterima) if sk.tanggal_diterima else None
+        }
+    }

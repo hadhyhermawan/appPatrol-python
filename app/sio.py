@@ -1,6 +1,7 @@
 import socketio
 from jose import jwt, JWTError
-from app.routers.auth_legacy import SECRET_KEY, ALGORITHM
+from app.routers.auth_legacy import SECRET_KEY, ALGORITHM, validate_sanctum_token
+from app.database import SessionLocal
 from urllib.parse import parse_qs
 
 # Create Socket.IO Server (Async implementation for ASGI)
@@ -59,6 +60,29 @@ async def connect(sid, environ, auth):
         }
         
     except JWTError:
+        # Fallback: Try Sanctum Token (Legacy Android)
+        print(f"Socket: JWT Decode failed for SID {sid}. Trying Sanctum...")
+        db = SessionLocal()
+        try:
+            sanctum_user_id = validate_sanctum_token(db, token)
+            if sanctum_user_id:
+                user_id = str(sanctum_user_id)
+                print(f"Socket Connected (Sanctum): User {user_id} (SID: {sid})")
+                
+                await sio.save_session(sid, {'user_id': user_id})
+                
+                clients[sid] = {
+                    'userId': user_id,
+                    'role': None,
+                    'webrtc_room': None,
+                    'walkie_channel': None
+                }
+                return True
+        except Exception as e:
+            print(f"Socket Sanctum Error: {e}")
+        finally:
+            db.close()
+
         print(f"Socket Connect Rejected: Invalid Token (SID: {sid})")
         return False
 

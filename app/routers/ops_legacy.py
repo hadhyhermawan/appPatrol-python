@@ -7,10 +7,12 @@ from sqlalchemy import desc
 import shutil
 import os
 import uuid
+from PIL import Image
+import io
 
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
-from app.models.models import SafetyBriefings, Turlalin, SuratMasuk, SuratKeluar, Tamu, Karyawan, PengaturanUmum, Users, Cabang, Jabatan, Departemen
+from app.models.models import SafetyBriefings, Turlalin, SuratMasuk, SuratKeluar, Tamu, Karyawan, Userkaryawan, PengaturanUmum, Users, Cabang, Jabatan, Departemen
 
 router = APIRouter(
     prefix="/api/android",
@@ -84,22 +86,58 @@ async def store_regu_parameter():
 @router.get("/turlalin")
 async def list_turlalin(
     limit: int = 20,
+    user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
-    items = db.query(Turlalin).order_by(desc(Turlalin.jam_masuk)).limit(limit).all()
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Data karyawan tidak ditemukan")
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        return {"status": True, "message": shift_check["message"], "data": []}
+
+    kode_cabang = karyawan.kode_cabang
+
+    items = db.query(Turlalin).join(Karyawan, Turlalin.nik == Karyawan.nik)\
+        .filter(Karyawan.kode_cabang == kode_cabang)\
+        .order_by(Turlalin.jam_keluar.isnot(None), desc(Turlalin.jam_masuk)).limit(limit).all()
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
     data = []
     for i in items:
+        foto_url = None
+        if i.foto:
+            foto_url = i.foto if i.foto.startswith("http") else f"{base_url}{i.foto}"
+            
+        foto_keluar_url = None
+        if i.foto_keluar:
+            foto_keluar_url = i.foto_keluar if i.foto_keluar.startswith("http") else f"{base_url}{i.foto_keluar}"
+
         data.append({
             "id": i.id,
             "nomor_polisi": i.nomor_polisi,
+            "keterangan": i.keterangan,
+            "foto": foto_url,
+            "foto_keluar": foto_keluar_url,
             "jam_masuk": str(i.jam_masuk),
             "jam_keluar": str(i.jam_keluar) if i.jam_keluar else None,
-            "keterangan": i.keterangan,
-            "foto": i.foto
+            "nik": i.nik,
+            "nik_keluar": i.nik_keluar,
+            "nama_satpam_masuk": i.karyawan.nama_karyawan if i.karyawan else None,
+            "nama_satpam_keluar": i.karyawan_.nama_karyawan if i.karyawan_ else None,
+            "created_at": str(i.created_at) if hasattr(i, 'created_at') and i.created_at else None,
+            "updated_at": str(i.created_at) if hasattr(i, 'updated_at') and i.updated_at else None
         })
-    return {"status": True, "data": data}
+    return {
+        "status": True, 
+        "nik_satpam": karyawan.nik,
+        "kode_cabang": karyawan.kode_cabang,
+        "data": data
+    }
 
-@router.post("/turlalin/store") # Called for Masuk
+@router.post("/turlalin/store")
 async def store_turlalin_masuk(
     nomor_polisi: str = Form(...),
     keterangan: str = Form(""),
@@ -107,6 +145,16 @@ async def store_turlalin_masuk(
     user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Data karyawan tidak ditemukan")
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"status": False, "message": shift_check["message"]})
+
     filename = f"turlalin_{uuid.uuid4().hex[:6]}.jpg"
     path = os.path.join(STORAGE_TURLALIN, filename)
     with open(path, "wb") as buffer:
@@ -121,25 +169,85 @@ async def store_turlalin_masuk(
     )
     db.add(new_data)
     db.commit()
-    return {"status": True, "message": "Turlalin Masuk Tercatat", "data": {"id": new_data.id}}
+    db.refresh(new_data)
 
-@router.post("/turlalin/checkout/{id}")
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+
+    return {
+        "status": True, 
+        "message": "Turlalin Masuk Tercatat", 
+        "data": {
+            "id": new_data.id,
+            "nomor_polisi": new_data.nomor_polisi,
+            "keterangan": new_data.keterangan,
+            "foto": f"{base_url}{new_data.foto}",
+            "foto_keluar": None,
+            "jam_masuk": str(new_data.jam_masuk),
+            "jam_keluar": None,
+            "nik": getattr(new_data, 'nik', None),
+            "nik_keluar": None,
+            "created_at": str(new_data.created_at) if hasattr(new_data, 'created_at') and new_data.created_at else None,
+            "updated_at": str(new_data.created_at) if hasattr(new_data, 'updated_at') and new_data.updated_at else None
+        }
+    }
+
+@router.post("/turlalin/keluar")
 async def store_turlalin_keluar(
-    id: int,
-    foto_keluar: UploadFile = File(None), # Optional?
+    id: int = Form(...),
+    foto_keluar: UploadFile = File(None),
     user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Data karyawan tidak ditemukan")
+
+    from app.routers.tamu_legacy import check_jam_kerja_status
+    shift_check = check_jam_kerja_status(db, karyawan)
+    if not shift_check["status"]:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"status": False, "message": shift_check["message"]})
+
     data = db.query(Turlalin).filter(Turlalin.id == id).first()
     if not data:
         raise HTTPException(404, "Data tidak ditemukan")
         
+    if foto_keluar:
+        filename = f"turlalin_keluar_{uuid.uuid4().hex[:6]}.jpg"
+        path = os.path.join(STORAGE_TURLALIN, filename)
+        with open(path, "wb") as buffer:
+            shutil.copyfileobj(foto_keluar.file, buffer)
+        data.foto_keluar = f"turlalin/{filename}"
+        
     data.jam_keluar = datetime.now()
     data.nik_keluar = user.nik
-    # If foto keluar needed, handle it.
     
     db.commit()
-    return {"status": True, "message": "Turlalin Keluar Tercatat"}
+    db.refresh(data)
+
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = data.foto if data.foto and data.foto.startswith("http") else f"{base_url}{data.foto}" if data.foto else None
+    foto_keluar_url = data.foto_keluar if data.foto_keluar and data.foto_keluar.startswith("http") else f"{base_url}{data.foto_keluar}" if data.foto_keluar else None
+
+    return {
+        "status": True, 
+        "message": "Turlalin Keluar Tercatat",
+        "data": {
+            "id": data.id,
+            "nomor_polisi": data.nomor_polisi,
+            "keterangan": data.keterangan,
+            "foto": foto_url,
+            "foto_keluar": foto_keluar_url,
+            "jam_masuk": str(data.jam_masuk),
+            "jam_keluar": str(data.jam_keluar) if data.jam_keluar else None,
+            "nik": data.nik,
+            "nik_keluar": data.nik_keluar,
+            "nama_satpam_masuk": data.karyawan.nama_karyawan if data.karyawan else None,
+            "nama_satpam_keluar": data.karyawan_.nama_karyawan if hasattr(data, 'karyawan_') and data.karyawan_ else None,
+            "created_at": str(data.created_at) if hasattr(data, 'created_at') and data.created_at else None,
+            "updated_at": str(data.created_at) if hasattr(data, 'updated_at') and data.updated_at else None
+        }
+    }
     
 
 # --- SURAT MENYURAT ---
@@ -281,6 +389,70 @@ async def _get_profile_data(user, db):
     }
     
     return {"status": "success", "data": data_pengaturan}
+
+@router.post("/pengaturan/updatefotoprofil")
+async def update_foto_profil(
+    foto: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    """Update foto profil karyawan"""
+    u = db.query(Users).filter(Users.id == user.id).first()
+    if not u:
+        raise HTTPException(401, "User tidak ditemukan")
+
+    user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == user.id).first()
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first() if user_karyawan else None
+
+    # Compress & save image
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    try:
+        image_content = await foto.read()
+        image = Image.open(io.BytesIO(image_content))
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+        # Resize jika terlalu besar
+        max_w = 800
+        if image.width > max_w:
+            ratio = max_w / image.width
+            image = image.resize((max_w, int(image.height * ratio)), Image.Resampling.LANCZOS)
+
+        filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
+        if karyawan:
+            save_dir = f"/var/www/appPatrol/storage/app/public/karyawan"
+            rel_path = f"karyawan/{filename}"
+        else:
+            save_dir = f"/var/www/appPatrol/storage/app/public/users"
+            rel_path = f"users/{filename}"
+
+        os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, filename)
+        image.save(path, "JPEG", quality=80)
+
+    except Exception as e:
+        raise HTTPException(500, f"Gagal memproses foto: {str(e)}")
+
+    # Update record
+    if karyawan:
+        karyawan.foto = filename
+    else:
+        u.foto = filename
+
+    db.commit()
+
+    foto_url = f"{base_url}{rel_path}"
+    nama = karyawan.nama_karyawan if karyawan else u.name
+    nik = user_karyawan.nik if user_karyawan else ""
+
+    return {
+        "status": True,
+        "message": "Foto profil berhasil diperbarui",
+        "data": {
+            "nik": nik,
+            "nama_karyawan": nama,
+            "foto": foto_url
+        }
+    }
 
 @router.get("/app/version-policy")
 async def get_version_policy(db: Session = Depends(get_db)):

@@ -8,16 +8,10 @@ from typing import Optional, List, Dict, Any
 from app.database import get_db
 from app.models.models import (
     Users, Karyawan, Departemen, Cabang, Jabatan,
-    Presensi, PresensiJamkerja, Lembur,
-    PresensiIzinabsenApprove, PresensiIzinabsen,
-    PresensiIzinsakitApprove, PresensiIzinsakit,
-    PresensiIzincutiApprove, PresensiIzincuti
+    Presensi, PresensiJamkerja
 )
 from app.routers.auth import get_current_user
-# Use get_current_user_nik from auth_legacy if utilizing legacy token mechanism, 
-# or use get_current_user if switching to standard auth.
-# Assuming we want to support the existing Android Auth (Sanctum/Legacy Token).
-from app.routers.auth_legacy import get_current_user_nik 
+from app.routers.auth_legacy import get_current_user_nik
 
 router = APIRouter(
     prefix="/api/android",
@@ -28,16 +22,14 @@ router = APIRouter(
 # Timezone WIB
 WIB = pytz.timezone('Asia/Jakarta')
 
-def get_image_url(request, path: str):
+BASE_STORAGE_URL = "https://frontend.k3guard.com/api-py/storage/"
+
+def get_image_url(path: str):
     if not path:
         return None
-    # Hardcoded base URL for storage
-    base_url = "https://k3guard.com/storage" 
-    # Laravel logic: asset('storage/karyawan/' . $karyawan->foto)
-    # Check if path already contains full url (rare)
     if path.startswith("http"):
         return path
-    return f"{base_url}/karyawan/{path}"
+    return f"{BASE_STORAGE_URL}karyawan/{path}"
 
 @router.get("/beranda")
 async def get_beranda(
@@ -90,7 +82,7 @@ async def get_beranda(
                 sisa_hari = delta.days
         
         # Foto URL
-        foto_url = get_image_url(None, karyawan.foto) if karyawan.foto else None
+        foto_url = get_image_url(karyawan.foto) if karyawan.foto else None
 
         # 3. Presensi Logic (Besok -> Hari Ini -> Kemarin Lintas Hari)
         hari_ini_str = datetime.now(WIB).strftime("%Y-%m-%d")
@@ -121,124 +113,66 @@ async def get_beranda(
                 Presensi.jam_out == None
             ).order_by(desc(Presensi.id)).first()
 
-        # 4. Data Presensi (Riwayat 30 Terakhir + Detail)
+        # 4. Data Presensi (Riwayat 30 Terakhir — hanya field yang dipakai Android)
         riwayat_query = db.query(
-            Presensi,
+            Presensi.tanggal,
+            Presensi.jam_in,
+            Presensi.jam_out,
+            Presensi.foto_in,
+            Presensi.foto_out,
+            Presensi.kode_jam_kerja,
             PresensiJamkerja.nama_jam_kerja,
             PresensiJamkerja.jam_masuk,
             PresensiJamkerja.jam_pulang,
-            PresensiJamkerja.total_jam,
-            PresensiJamkerja.lintashari,
-            PresensiIzinabsen.keterangan.label("keterangan_izin"),
-            PresensiIzinsakit.keterangan.label("keterangan_izin_sakit"),
-            PresensiIzincuti.keterangan.label("keterangan_izin_cuti")
+            PresensiJamkerja.lintashari
         ).join(
             PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja
-        ).outerjoin(
-            PresensiIzinabsenApprove, Presensi.id == PresensiIzinabsenApprove.id_presensi
-        ).outerjoin(
-            PresensiIzinabsen, PresensiIzinabsenApprove.kode_izin == PresensiIzinabsen.kode_izin
-        ).outerjoin(
-            PresensiIzinsakitApprove, Presensi.id == PresensiIzinsakitApprove.id_presensi
-        ).outerjoin(
-            PresensiIzinsakit, PresensiIzinsakitApprove.kode_izin_sakit == PresensiIzinsakit.kode_izin_sakit
-        ).outerjoin(
-            PresensiIzincutiApprove, Presensi.id == PresensiIzincutiApprove.id_presensi
-        ).outerjoin(
-            PresensiIzincuti, PresensiIzincutiApprove.kode_izin_cuti == PresensiIzincuti.kode_izin_cuti
         ).filter(
             Presensi.nik == karyawan.nik
         ).order_by(
             desc(Presensi.tanggal)
         ).limit(30).all()
 
-        datapresensi = []
-        for row in riwayat_query:
-            p, nama_jk, jam_m, jam_p, tot_jam, lh, ket_izin, ket_sakit, ket_cuti = row
-            
-            p_dict = {c.name: getattr(p, c.name) for c in p.__table__.columns}
-            
-            # Format standard dates to string with specific handling for time fields
-            for k, v in p_dict.items():
-                if k in ['jam_in', 'jam_out', 'istirahat_in', 'istirahat_out'] and isinstance(v, datetime):
-                    p_dict[k] = v.strftime("%H:%M:%S")
-                elif isinstance(v, (date, datetime, time)):
-                    p_dict[k] = str(v)
+        def fmt_time(v):
+            if isinstance(v, datetime): return v.strftime("%H:%M:%S")
+            if isinstance(v, (date, time)): return str(v)
+            return v
 
-            p_dict.update({
-                "nama_jam_kerja": nama_jk,
-                "jam_masuk": str(jam_m) if jam_m else None,
-                "jam_pulang": str(jam_p) if jam_p else None,
-                "total_jam": tot_jam,
-                "lintashari": lh,
-                "keterangan_izin": ket_izin,
-                "keterangan_izin_sakit": ket_sakit,
-                "keterangan_izin_cuti": ket_cuti
-            })
-            datapresensi.append(p_dict)
+        datapresensi = [
+            {
+                "tanggal": str(row.tanggal) if row.tanggal else None,
+                "jam_in": fmt_time(row.jam_in),
+                "jam_out": fmt_time(row.jam_out),
+                "foto_in": row.foto_in,
+                "foto_out": row.foto_out,
+                "kode_jam_kerja": row.kode_jam_kerja,
+                "nama_jam_kerja": row.nama_jam_kerja,
+                "jam_masuk": str(row.jam_masuk) if row.jam_masuk else None,
+                "jam_pulang": str(row.jam_pulang) if row.jam_pulang else None,
+                "lintashari": row.lintashari
+            }
+            for row in riwayat_query
+        ]
 
-        # 5. Rekap Presensi Bulan Ini
-        current_month = datetime.now(WIB).month
-        current_year = datetime.now(WIB).year
-        
-        rekap = db.query(
-            func.sum(case((Presensi.status == 'h', 1), else_=0)).label('hadir'),
-            func.sum(case((Presensi.status == 'i', 1), else_=0)).label('izin'),
-            func.sum(case((Presensi.status == 's', 1), else_=0)).label('sakit'),
-            func.sum(case((Presensi.status == 'a', 1), else_=0)).label('alpa'),
-            func.sum(case((Presensi.status == 'c', 1), else_=0)).label('cuti')
-        ).filter(
-            Presensi.nik == karyawan.nik,
-            func.extract('month', Presensi.tanggal) == current_month,
-            func.extract('year', Presensi.tanggal) == current_year
-        ).first()
-
-        rekappresensi = {
-            "hadir": int(rekap.hadir or 0),
-            "izin": int(rekap.izin or 0),
-            "sakit": int(rekap.sakit or 0),
-            "alpa": int(rekap.alpa or 0),
-            "cuti": int(rekap.cuti or 0)
-        }
-
-        # 6. Lembur
-        lembur_query = db.query(Lembur).filter(
-            Lembur.nik == karyawan.nik,
-            Lembur.status == '1'
-        ).order_by(desc(Lembur.id)).limit(10).all()
-        
-        lembur_data = []
-        for l in lembur_query:
-            l_dict = {c.name: getattr(l, c.name) for c in Lembur.__table__.columns}
-            for k, v in l_dict.items():
-                if isinstance(v, (date, datetime, time)):
-                    l_dict[k] = str(v)
-            lembur_data.append(l_dict)
-
-        notiflembur = db.query(Lembur).filter(
-            Lembur.nik == karyawan.nik,
-            Lembur.status == '1',
-            or_(Lembur.lembur_in == None, Lembur.lembur_out == None)
-        ).count()
-
-        # Serialize presensi_hari_ini manually if exists
+        # Serialize presensi_hari_ini — hanya field yang dipakai Android
         presensi_hari_ini_dict = None
         if presensi_hari_ini:
-            # Convert SQLAlchemy object to dict
-            p_dict = {c.name: getattr(presensi_hari_ini, c.name) for c in presensi_hari_ini.__table__.columns}
-            
-            # Format time fields
-            for k, v in p_dict.items():
-                if k in ['jam_in', 'jam_out', 'istirahat_in', 'istirahat_out'] and isinstance(v, datetime):
-                    p_dict[k] = v.strftime("%H:%M:%S")
-                elif isinstance(v, (date, datetime, time)):
-                    p_dict[k] = str(v)
-            
-            presensi_hari_ini_dict = p_dict
+            jam_kerja = db.query(PresensiJamkerja).filter(
+                PresensiJamkerja.kode_jam_kerja == presensi_hari_ini.kode_jam_kerja
+            ).first()
+            presensi_hari_ini_dict = {
+                "tanggal": str(presensi_hari_ini.tanggal) if presensi_hari_ini.tanggal else None,
+                "jam_in": fmt_time(presensi_hari_ini.jam_in),
+                "jam_out": fmt_time(presensi_hari_ini.jam_out),
+                "foto_in": presensi_hari_ini.foto_in,
+                "foto_out": presensi_hari_ini.foto_out,
+                "kode_jam_kerja": presensi_hari_ini.kode_jam_kerja,
+                "nama_jam_kerja": jam_kerja.nama_jam_kerja if jam_kerja else None,
+                "jam_masuk": str(jam_kerja.jam_masuk) if jam_kerja and jam_kerja.jam_masuk else None,
+                "jam_pulang": str(jam_kerja.jam_pulang) if jam_kerja and jam_kerja.jam_pulang else None,
+                "lintashari": jam_kerja.lintashari if jam_kerja else None
+            }
 
-        # Construct Final Response Structure
-        # Android expects: { status: true, data: { ... } }
-        
         return {
             "status": True,
             "data": {
@@ -246,18 +180,16 @@ async def get_beranda(
                     "nik": karyawan.nik,
                     "nama_karyawan": karyawan.nama_karyawan,
                     "kode_dept": karyawan.kode_dept,
+                    "kode_cabang": kode_cabang,
                     "nama_jabatan": nama_jabatan,
                     "nama_dept": nama_dept,
                     "nama_cabang": nama_cabang,
-                    "kode_cabang": kode_cabang,
                     "foto": foto_url,
+                    "kode_jadwal": karyawan.kode_jadwal,
                     "sisa_hari_masa_aktif_kartu": sisa_hari
                 },
                 "presensi_hari_ini": presensi_hari_ini_dict,
-                "datapresensi": datapresensi,
-                "rekappresensi": rekappresensi,
-                "lembur": lembur_data,
-                "notiflembur": notiflembur
+                "datapresensi": datapresensi
             }
         }
 

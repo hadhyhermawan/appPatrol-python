@@ -5,9 +5,10 @@ from app.database import get_db
 from app.models.models import Presensi, Karyawan, Departemen, PresensiJamkerja
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import date, datetime
+from datetime import date, datetime, time
 from app.routers.master import get_full_image_url
 from app.core.permissions import get_current_user
+import math
 
 router = APIRouter(
     prefix="/api/monitoring",
@@ -15,19 +16,23 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)]
 )
 
+# ─── Schemas ──────────────────────────────────────────────────────────────────
+
 class PresensiItem(BaseModel):
     id: int
     nik: str
     nama_karyawan: Optional[str]
     nama_dept: Optional[str]
     nama_jam_kerja: Optional[str]
-    jam_in: Optional[str] 
+    jam_in: Optional[str]
     jam_out: Optional[str]
     foto_in: Optional[str]
     foto_out: Optional[str]
     lokasi_in: Optional[str]
     lokasi_out: Optional[str]
     status_kehadiran: Optional[str]
+    kode_jam_kerja: Optional[str] = None
+    tanggal: Optional[str] = None
 
 class PaginationMeta(BaseModel):
     total_items: int
@@ -41,16 +46,40 @@ class MonitoringResponse(BaseModel):
     data: List[PresensiItem]
     meta: Optional[PaginationMeta] = None
 
+class PresensiUpdatePayload(BaseModel):
+    jam_in: Optional[str] = None        # "HH:MM" atau "HH:MM:SS"
+    jam_out: Optional[str] = None       # "HH:MM" atau "HH:MM:SS", kosong = hapus jam_out
+    status: Optional[str] = None        # H / I / S / A
+    kode_jam_kerja: Optional[str] = None
+
+
+# ─── Helper ───────────────────────────────────────────────────────────────────
+
+def _parse_to_datetime(val: Optional[str], ref_date: date) -> Optional[datetime]:
+    """Parse 'HH:MM' atau 'HH:MM:SS' menjadi datetime (dengan tanggal dari record presensi)."""
+    if not val or val.strip() in ('-', ''):
+        return None
+    parts = val.strip().split(':')
+    try:
+        h, m = int(parts[0]), int(parts[1])
+        s = int(parts[2]) if len(parts) > 2 else 0
+        return datetime.combine(ref_date, time(h, m, s))
+    except Exception:
+        return None
+
+
+# ─── GET: Daftar Presensi (paginasi + filter) ─────────────────────────────────
+
 @router.get("/presensi", response_model=MonitoringResponse)
 async def get_monitoring_presensi(
-    date: Optional[date] = Query(None, description="Tanggal monitoring YYYY-MM-DD. Jika kosong tampilkan semua."),
-    dept_code: Optional[str] = Query(None, description="Kode Departemen Filter"),
-    page: int = Query(1, ge=1, description="Nomor Halaman"),
-    per_page: int = Query(20, ge=1, le=100, description="Jumlah per halaman"),
+    date: Optional[date] = Query(None),
+    dept_code: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
     try:
-        # Build Query
         query = db.query(
             Presensi.id,
             Presensi.nik,
@@ -63,56 +92,51 @@ async def get_monitoring_presensi(
             Presensi.foto_out,
             Presensi.lokasi_in,
             Presensi.lokasi_out,
-            Presensi.status
-        ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik)\
-         .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept)\
+            Presensi.status,
+            Presensi.kode_jam_kerja,
+            Presensi.tanggal,
+        ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik) \
+         .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept) \
          .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)
-        
-        # Filter by Date (Optional)
+
         if date:
             query = query.filter(Presensi.tanggal == date)
-        
-        # Filter by Dept
         if dept_code:
             query = query.filter(Karyawan.kode_dept == dept_code)
-            
-        # Total Count (Before Pagination)
+        if search:
+            st = f"%{search}%"
+            query = query.filter(
+                (Karyawan.nama_karyawan.ilike(st)) | (Presensi.nik.ilike(st))
+            )
+
         total_items = query.count()
-        
-        # Order and Pagination
-        query = query.order_by(Presensi.jam_in.desc())
-        query = query.offset((page - 1) * per_page).limit(per_page)
-        
-        results = query.all()
-        
-        # Calculate pagination meta
-        import math
-        total_pages = math.ceil(total_items / per_page)
-        
-        data_list = []
-        for row in results:
-            # Format time
-            jin = row.jam_in.strftime("%H:%M:%S") if row.jam_in else "-"
-            jout = row.jam_out.strftime("%H:%M:%S") if row.jam_out else "-"
-            
-            item = PresensiItem(
+        total_pages = math.ceil(total_items / per_page) if total_items > 0 else 1
+
+        results = query.order_by(Presensi.jam_in.desc()) \
+                       .offset((page - 1) * per_page).limit(per_page).all()
+
+        data_list = [
+            PresensiItem(
                 id=row.id,
                 nik=row.nik,
                 nama_karyawan=row.nama_karyawan or "Unknown",
                 nama_dept=row.nama_dept or "-",
                 nama_jam_kerja=row.nama_jam_kerja or "-",
-                jam_in=jin,
-                jam_out=jout,
+                jam_in=row.jam_in.strftime("%H:%M:%S") if row.jam_in else "-",
+                jam_out=row.jam_out.strftime("%H:%M:%S") if row.jam_out else "-",
                 foto_in=get_full_image_url(row.foto_in, "storage/uploads/absensi") if row.foto_in else None,
                 foto_out=get_full_image_url(row.foto_out, "storage/uploads/absensi") if row.foto_out else None,
                 lokasi_in=row.lokasi_in,
                 lokasi_out=row.lokasi_out,
-                status_kehadiran=row.status
+                status_kehadiran=row.status,
+                kode_jam_kerja=row.kode_jam_kerja,
+                tanggal=str(row.tanggal) if row.tanggal else None,
             )
-            data_list.append(item)
-            
+            for row in results
+        ]
+
         return MonitoringResponse(
-            status=True, 
+            status=True,
             message="Data presensi berhasil diambil",
             data=data_list,
             meta=PaginationMeta(
@@ -124,54 +148,111 @@ async def get_monitoring_presensi(
         )
 
     except Exception as e:
-        print(f"ERROR MONITORING: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GET: Detail Presensi ─────────────────────────────────────────────────────
 
 @router.get("/presensi/{id}", response_model=PresensiItem)
 async def get_monitoring_presensi_detail(id: int, db: Session = Depends(get_db)):
     try:
-        query = db.query(
-            Presensi,
-            Karyawan.nama_karyawan,
-            Departemen.nama_dept,
-            PresensiJamkerja.nama_jam_kerja
-        ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik)\
-         .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept)\
-         .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
-         .filter(Presensi.id == id)
-        
-        result = query.first()
-        
+        result = db.query(
+            Presensi, Karyawan.nama_karyawan, Departemen.nama_dept, PresensiJamkerja.nama_jam_kerja
+        ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik) \
+         .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept) \
+         .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja) \
+         .filter(Presensi.id == id).first()
+
         if not result:
-             raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
-             
+            raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
+
         presensi, nama_karyawan, nama_dept, nama_jam_kerja = result
-        
-        jin = presensi.jam_in.strftime("%H:%M:%S") if presensi.jam_in else "-"
-        # Check if jam_out is valid (not default '00:00:00' if stored as such, but usually None or Time obj)
-        jout = presensi.jam_out.strftime("%H:%M:%S") if presensi.jam_out else "-"
-        
         return PresensiItem(
             id=presensi.id,
             nik=presensi.nik,
             nama_karyawan=nama_karyawan or "Unknown",
             nama_dept=nama_dept or "-",
             nama_jam_kerja=nama_jam_kerja or "-",
-            jam_in=jin,
-            jam_out=jout,
+            jam_in=presensi.jam_in.strftime("%H:%M:%S") if presensi.jam_in else "-",
+            jam_out=presensi.jam_out.strftime("%H:%M:%S") if presensi.jam_out else "-",
             foto_in=get_full_image_url(presensi.foto_in, "storage/uploads/absensi") if presensi.foto_in else None,
             foto_out=get_full_image_url(presensi.foto_out, "storage/uploads/absensi") if presensi.foto_out else None,
             lokasi_in=presensi.lokasi_in,
             lokasi_out=presensi.lokasi_out,
-            status_kehadiran=presensi.status
+            status_kehadiran=presensi.status,
+            kode_jam_kerja=presensi.kode_jam_kerja,
+            tanggal=str(presensi.tanggal) if presensi.tanggal else None,
         )
     except HTTPException:
         raise
     except Exception as e:
-        print(f"ERROR DETAIL PRESENSI: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── PUT: Edit Presensi ───────────────────────────────────────────────────────
+
+@router.put("/presensi/{id}")
+async def update_monitoring_presensi(
+    id: int,
+    payload: PresensiUpdatePayload,
+    db: Session = Depends(get_db)
+):
+    """Edit jam_in, jam_out, status, dan shift karyawan."""
+    try:
+        presensi = db.query(Presensi).filter(Presensi.id == id).first()
+        if not presensi:
+            raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
+
+        # Ambil tanggal dari record untuk membentuk datetime lengkap
+        ref_date = presensi.tanggal if presensi.tanggal else date.today()
+
+        if payload.jam_in is not None:
+            presensi.jam_in = _parse_to_datetime(payload.jam_in, ref_date)
+        if payload.jam_out is not None:
+            presensi.jam_out = _parse_to_datetime(payload.jam_out, ref_date)
+        if payload.status is not None:
+            presensi.status = payload.status.upper()
+        if payload.kode_jam_kerja is not None:
+            presensi.kode_jam_kerja = payload.kode_jam_kerja or None
+
+        db.commit()
+
+        # Format response — ambil hanya bagian jam dari datetime/time/string
+        def fmt_time(t) -> str:
+            if t is None:
+                return "-"
+            if isinstance(t, datetime):
+                return t.strftime("%H:%M:%S")
+            if isinstance(t, time):
+                return t.strftime("%H:%M:%S")
+            # Fallback string
+            s = str(t)
+            if ' ' in s:           # datetime string: "2025-01-01 08:00:00"
+                s = s.split(' ')[1]
+            return s[:8] if s else "-"
+
+        return {
+            "status": True,
+            "message": "Data presensi berhasil diupdate",
+            "data": {
+                "id": presensi.id,
+                "jam_in": fmt_time(presensi.jam_in),
+                "jam_out": fmt_time(presensi.jam_out),
+                "status": presensi.status,
+                "kode_jam_kerja": presensi.kode_jam_kerja,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"ERROR UPDATE PRESENSI: {e}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── DELETE: Hapus Presensi ───────────────────────────────────────────────────
 
 @router.delete("/presensi/{id}")
 async def delete_monitoring_presensi(id: int, db: Session = Depends(get_db)):
@@ -179,14 +260,30 @@ async def delete_monitoring_presensi(id: int, db: Session = Depends(get_db)):
         presensi = db.query(Presensi).filter(Presensi.id == id).first()
         if not presensi:
             raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
-            
         db.delete(presensi)
         db.commit()
-        
         return {"status": True, "message": "Data presensi berhasil dihapus"}
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        print(f"ERROR DELETE PRESENSI: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GET: Opsi Jam Kerja (untuk dropdown modal edit) ─────────────────────────
+
+@router.get("/jam-kerja-options")
+async def get_jam_kerja_options(db: Session = Depends(get_db)):
+    rows = db.query(PresensiJamkerja).order_by(PresensiJamkerja.nama_jam_kerja).all()
+    return {
+        "status": True,
+        "data": [
+            {
+                "kode": r.kode_jam_kerja,
+                "nama": r.nama_jam_kerja,
+                "jam_masuk": str(r.jam_masuk) if r.jam_masuk else None,
+                "jam_pulang": str(r.jam_pulang) if r.jam_pulang else None,
+            }
+            for r in rows
+        ]
+    }

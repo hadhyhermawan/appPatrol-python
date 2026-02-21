@@ -29,7 +29,8 @@ async def get_dashboard_stats(
         func.sum(case((Presensi.status == 'i', 1), else_=0)).label('izin'),
         func.sum(case((Presensi.status == 's', 1), else_=0)).label('sakit'),
         func.sum(case((Presensi.status == 'c', 1), else_=0)).label('cuti'),
-        func.sum(case((Presensi.status == 'a', 1), else_=0)).label('alfa')
+        func.sum(case((Presensi.status == 'a', 1), else_=0)).label('alfa'),
+        func.sum(case((Presensi.status == 'ta', 1), else_=0)).label('lupa_pulang'),  # ← baru
     ).join(Karyawan, Presensi.nik == Karyawan.nik)\
      .filter(func.date(Presensi.tanggal) == target_date)
     
@@ -320,6 +321,7 @@ async def get_dashboard_stats(
                 "sakit": rekap.sakit or 0,
                 "cuti": rekap.cuti or 0,
                 "alfa": rekap.alfa or 0,
+                "lupa_pulang": rekap.lupa_pulang or 0,  # ← status 'ta'
                 "change": (rekap.hadir or 0) - yesterday_hadir,
                 "changePercent": round(((rekap.hadir or 0) - yesterday_hadir) / max(yesterday_hadir, 1) * 100, 1) if yesterday_hadir > 0 else 0
             },

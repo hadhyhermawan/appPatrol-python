@@ -531,3 +531,377 @@ async def store_patroli_point(
         "session_status": session.status,
         "lock_location": "1" # Todo: fetch from karyawan
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: resolve jam_kerja untuk tanggal tertentu (mirip getJamKerja PHP)
+# ─────────────────────────────────────────────────────────────────────────────
+def _resolve_jam_kerja_for_date(nik: str, kode_cabang: str, kode_dept: str,
+                                 target_date: date, db: Session):
+    """
+    Urutan resolusi: Presensi → ByDate → ByDay → ByDept → Master Karyawan → Group Presensi
+    """
+    from app.models.models import (
+        Presensi, SetJamKerjaByDate, SetJamKerjaByDay,
+        PresensiJamkerja, Karyawan,
+        PresensiJamkerjaBydept, PresensiJamkerjaByDeptDetail
+    )
+
+    hari_map = {0: 'Senin', 1: 'Selasa', 2: 'Rabu', 3: 'Kamis',
+                4: 'Jumat', 5: 'Sabtu', 6: 'Minggu'}
+    hari_indo = hari_map[target_date.weekday()]
+
+    # 1. Dari presensi hari itu
+    presensi = db.query(Presensi).filter(
+        Presensi.nik == nik,
+        Presensi.tanggal == target_date
+    ).first()
+    if presensi and presensi.kode_jam_kerja:
+        jk = db.query(PresensiJamkerja).filter(
+            PresensiJamkerja.kode_jam_kerja == presensi.kode_jam_kerja
+        ).first()
+        if jk:
+            return jk, presensi
+
+    # 2. SetJamKerjaByDate
+    jk_date = db.query(SetJamKerjaByDate).filter(
+        SetJamKerjaByDate.nik == nik,
+        SetJamKerjaByDate.tanggal == target_date
+    ).first()
+    if jk_date:
+        jk = db.query(PresensiJamkerja).filter(
+            PresensiJamkerja.kode_jam_kerja == jk_date.kode_jam_kerja
+        ).first()
+        if jk:
+            return jk, presensi
+
+    # 3. SetJamKerjaByDay
+    jk_day = db.query(SetJamKerjaByDay).filter(
+        SetJamKerjaByDay.nik == nik,
+        SetJamKerjaByDay.hari == hari_indo
+    ).first()
+    if jk_day:
+        jk = db.query(PresensiJamkerja).filter(
+            PresensiJamkerja.kode_jam_kerja == jk_day.kode_jam_kerja
+        ).first()
+        if jk:
+            return jk, presensi
+
+    # 4. Master karyawan
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+    if karyawan and karyawan.kode_jam_kerja:
+        jk = db.query(PresensiJamkerja).filter(
+            PresensiJamkerja.kode_jam_kerja == karyawan.kode_jam_kerja
+        ).first()
+        if jk:
+            return jk, presensi
+
+    return None, presensi
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: build schedule task list untuk satu hari
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_schedule_tasks_for_day(
+    target_date: date,
+    jam_kerja,
+    karyawan,
+    group_niks: list,
+    db: Session
+):
+    from app.models.models import PatrolSchedules, PatrolSessions
+    from sqlalchemy import or_
+
+    schedules = db.query(PatrolSchedules).filter(
+        PatrolSchedules.kode_jam_kerja == jam_kerja.kode_jam_kerja,
+        PatrolSchedules.is_active == True
+    ).filter(
+        or_(PatrolSchedules.kode_dept == None, PatrolSchedules.kode_dept == karyawan.kode_dept)
+    ).filter(
+        or_(PatrolSchedules.kode_cabang == None, PatrolSchedules.kode_cabang == karyawan.kode_cabang)
+    ).all()
+
+    tasks = []
+    for sch in schedules:
+        start_dt = datetime.combine(target_date, sch.start_time)
+        end_dt   = datetime.combine(target_date, sch.end_time)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+
+        # Apakah sudah ada session dalam window ini dari grup?
+        session_in_window = db.query(PatrolSessions).filter(
+            PatrolSessions.nik.in_(group_niks),
+            PatrolSessions.created_at >= start_dt,
+            PatrolSessions.created_at <= end_dt
+        ).first()
+
+        if session_in_window:
+            status = 'done'
+            executor_nik = session_in_window.nik
+            executor_kary = db.query(Karyawan).filter(Karyawan.nik == executor_nik).first()
+            executor_name = executor_kary.nama_karyawan if executor_kary else executor_nik
+        elif datetime.now() > end_dt:
+            status = 'missed'
+            executor_name = None
+        else:
+            status = 'pending'
+            executor_name = None
+
+        date_str = target_date.strftime('%d %b')
+        tasks.append({
+            'name': f"{sch.name or 'Patroli'} ({sch.start_time.strftime('%H:%M')}-{sch.end_time.strftime('%H:%M')})",
+            'start_time': str(sch.start_time),
+            'end_time': str(sch.end_time),
+            'start_datetime': start_dt.isoformat(),
+            'end_datetime': end_dt.isoformat(),
+            'formatted_time': f"{date_str}, {sch.start_time.strftime('%H:%M')} - {sch.end_time.strftime('%H:%M')}",
+            'status': status,
+            'date': str(target_date),
+            'executor_name': executor_name
+        })
+
+    return tasks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: build quality payload untuk satu sesi
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_quality_payload(session: PatrolSessions, db: Session) -> dict:
+    points = db.query(PatrolPoints).join(
+        PatrolPointMaster,
+        PatrolPoints.patrol_point_master_id == PatrolPointMaster.id
+    ).filter(
+        PatrolPoints.patrol_session_id == session.id
+    ).order_by(PatrolPointMaster.urutan.asc()).all()
+
+    total = len(points)
+    completed = [p for p in points if p.jam is not None]
+    with_foto  = [p for p in points if p.foto]
+
+    completion_ratio = len(completed) / total if total else 0
+    photo_coverage   = len(with_foto)  / total if total else 0
+
+    timestamps = sorted([
+        datetime.combine(session.tanggal, p.jam).timestamp()
+        for p in completed if p.jam
+    ])
+    intervals = [timestamps[i] - timestamps[i-1] for i in range(1, len(timestamps))]
+    avg_interval = int(round(sum(intervals) / len(intervals))) if intervals else None
+    duration     = int(timestamps[-1] - timestamps[0]) if len(timestamps) >= 2 else None
+
+    score_raw = (completion_ratio * 0.7) + (photo_coverage * 0.3)
+    score     = int(round(min(100, max(0, score_raw * 100))))
+
+    tanggal_fmt = str(session.tanggal).replace('-', '')
+    points_view = []
+    for p in points:
+        master = db.query(PatrolPointMaster).filter(PatrolPointMaster.id == p.patrol_point_master_id).first()
+        foto_url = None
+        if p.foto:
+            foto_url = f"https://frontend.k3guard.com/api-py/storage/uploads/patroli/{session.nik}-{tanggal_fmt}-patrol/{p.foto}"
+        points_view.append({
+            'id': p.id,
+            'nama_titik': master.nama_titik if master else None,
+            'urutan': master.urutan if master else None,
+            'foto': foto_url,
+            'lokasi': p.lokasi,
+            'jam': str(p.jam) if p.jam else None,
+            'status': 'done' if p.jam else 'pending'
+        })
+
+    return {
+        'patrol_quality': {
+            'score': score,
+            'completion_ratio': round(completion_ratio * 100, 1),
+            'photo_coverage': round(photo_coverage * 100, 1),
+            'average_interval_seconds': avg_interval,
+            'duration_seconds': duration,
+            'total_points': total,
+            'completed_points': len(completed),
+            'remaining_points': max(0, total - len(completed))
+        },
+        'points': points_view
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4 ENDPOINT BARU
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/getPatrolHistory")
+async def get_patrol_history(
+    start_date: str = None,
+    end_date: str = None,
+    current_user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
+    if not user_karyawan:
+        return {"status": False, "message": "User Karyawan not found"}
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
+    if not karyawan:
+        return {"status": False, "message": "Karyawan not found"}
+
+    nik = karyawan.nik
+    today = date.today()
+    start = date.fromisoformat(start_date) if start_date else today.replace(day=1)
+    end   = date.fromisoformat(end_date)   if end_date   else today
+
+    group_niks = [
+        r[0] for r in db.query(Karyawan.nik).filter(
+            Karyawan.kode_cabang == karyawan.kode_cabang,
+            Karyawan.kode_dept   == karyawan.kode_dept
+        ).all()
+    ]
+
+    tasks = []
+    current_day = start
+    while current_day <= end:
+        jam_kerja, _ = _resolve_jam_kerja_for_date(
+            nik, karyawan.kode_cabang, karyawan.kode_dept, current_day, db
+        )
+        if jam_kerja:
+            day_tasks = _build_schedule_tasks_for_day(
+                current_day, jam_kerja, karyawan, group_niks, db
+            )
+            tasks.extend(day_tasks)
+        current_day += timedelta(days=1)
+
+    tasks.sort(key=lambda x: x['start_datetime'], reverse=True)
+
+    return {
+        "status": True,
+        "message": f"History fetched. TaskCount:{len(tasks)}",
+        "data": {"schedule_tasks": tasks}
+    }
+
+
+@router.get("/violation-notifications")
+async def get_violation_notifications(
+    current_user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
+    if not user_karyawan:
+        return {"status": False, "message": "User Karyawan not found"}
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
+    if not karyawan:
+        return {"status": False, "message": "Karyawan not found"}
+
+    nik = karyawan.nik
+    today = date.today()
+    start = today.replace(day=1)
+
+    group_niks = [
+        r[0] for r in db.query(Karyawan.nik).filter(
+            Karyawan.kode_cabang == karyawan.kode_cabang,
+            Karyawan.kode_dept   == karyawan.kode_dept
+        ).all()
+    ]
+
+    violations = []
+    current_day = start
+    while current_day <= today:
+        jam_kerja, _ = _resolve_jam_kerja_for_date(
+            nik, karyawan.kode_cabang, karyawan.kode_dept, current_day, db
+        )
+        if jam_kerja:
+            day_tasks = _build_schedule_tasks_for_day(
+                current_day, jam_kerja, karyawan, group_niks, db
+            )
+            for t in day_tasks:
+                if t['status'] == 'missed':
+                    violations.append({
+                        'title': f"Terlewat: {t['name'].split('(')[0].strip()}",
+                        'description': f"Jadwal {t['formatted_time']} tidak dilaksanakan.",
+                        'date': t['date'],
+                        'type': 'missed_patrol',
+                        'timestamp': t['end_datetime']
+                    })
+        current_day += timedelta(days=1)
+
+    violations.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return {
+        "status": True,
+        "count": len(violations),
+        "data": violations
+    }
+
+
+@router.get("/quality/{session_id}")
+async def get_patrol_quality(
+    session_id: int,
+    current_user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
+    if not user_karyawan:
+        raise HTTPException(404, "Karyawan not found")
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Karyawan not found")
+
+    session = db.query(PatrolSessions).filter(
+        PatrolSessions.id  == session_id,
+        PatrolSessions.nik == karyawan.nik
+    ).first()
+    if not session:
+        raise HTTPException(404, "Sesi tidak ditemukan")
+
+    payload = _build_quality_payload(session, db)
+
+    return {
+        "status": True,
+        "session_id": session.id,
+        "session_status": session.status,
+        "patrol_quality": payload['patrol_quality'],
+        "points": payload['points']
+    }
+
+
+@router.get("/quality")
+async def get_patrol_quality_list(
+    month: int = None,
+    year: int = None,
+    current_user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    user_karyawan = db.query(Userkaryawan).filter(Userkaryawan.id_user == current_user.id).first()
+    if not user_karyawan:
+        raise HTTPException(404, "Karyawan not found")
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == user_karyawan.nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Karyawan not found")
+
+    today = date.today()
+    if not month:
+        month = today.month
+    if not year:
+        year = today.year
+
+    from sqlalchemy import extract
+    sessions = db.query(PatrolSessions).filter(
+        PatrolSessions.nik == karyawan.nik,
+        extract('month', PatrolSessions.tanggal) == month,
+        extract('year',  PatrolSessions.tanggal) == year
+    ).order_by(PatrolSessions.tanggal.desc(), PatrolSessions.id.desc()).all()
+
+    session_list = []
+    for s in sessions:
+        payload = _build_quality_payload(s, db)
+        session_list.append({
+            'session_id':     s.id,
+            'tanggal':        str(s.tanggal),
+            'session_status': s.status,
+            'patrol_quality': payload['patrol_quality'],
+            'points':         payload['points']
+        })
+
+    return {
+        "status": True,
+        "month": month,
+        "year": year,
+        "sessions": session_list
+    }
+
