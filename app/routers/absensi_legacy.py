@@ -23,27 +23,10 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 # Set Timezone
 WIB = pytz.timezone('Asia/Jakarta')
 
-@router.get("/hariini")
-async def get_presensi_hari_ini(
-    nik: str = Depends(get_current_user_nik),
-    db: Session = Depends(get_db)
-):
-    # Use WIB Timezone
-    now_wib = datetime.now(WIB)
-    today = now_wib.date()
+def determine_jam_kerja_hari_ini(db: Session, nik: str, today: date, now_wib: datetime):
+    from app.models.models import SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerja, Karyawan, PresensiJamkerjaBydept, PresensiJamkerjaBydateExtra
     
-    # 1. Get Employee Data & Shift Schedule
-    # Correct models import verified via debug script
-    from app.models.models import SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerja, Karyawan, Cabang, KaryawanWajah, PengaturanUmum, PresensiJamkerjaBydept, PresensiJamkerjaBydateExtra
-    
-    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
-    if not karyawan:
-        raise HTTPException(404, "Data Karyawan tidak ditemukan")
-        
-    # Schedule Logic (Priority: Presensi > Date Extra > Date > Day > Dept Default > User Default)
     jam_kerja_obj = None
-    
-    # Check Presensi first to see if user already clocked in with specific schedule
     presensi = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
     
     # Logic Lintas Hari: Check if yesterday's shift is still ongoing
@@ -57,8 +40,7 @@ async def get_presensi_hari_ini(
         ).first()
         if presensi_yesterday:
             presensi = presensi_yesterday
-            # If tracking yesterday's shift, stick to that shift
-            
+
     # Determine Jam Kerja
     if presensi:
         # User already clocked in, use the recorded schedule
@@ -66,19 +48,19 @@ async def get_presensi_hari_ini(
     else:
         # Not clocked in yet, find today's schedule
         
-        # 0. By Date Extra (PresensiJamkerjaBydateExtra) - Highest Priority Override
+        # 0. By Date Extra (Highest Priority Override)
         by_date_extra = db.query(PresensiJamkerjaBydateExtra).filter(PresensiJamkerjaBydateExtra.nik == nik, PresensiJamkerjaBydateExtra.tanggal == today).first()
         if by_date_extra:
              jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_date_extra.kode_jam_kerja).first()
 
-        # 1. By Date (SetJamKerjaByDate -> table presensi_jamkerja_bydate)
+        # 1. By Date
         if not jam_kerja_obj:
             by_date = db.query(SetJamKerjaByDate).filter(SetJamKerjaByDate.nik == nik, SetJamKerjaByDate.tanggal == today).first()
             if by_date:
                 jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_date.kode_jam_kerja).first()
                 
         if not jam_kerja_obj:
-            # 2. By Day (SetJamKerjaByDay -> table presensi_jamkerja_byday)
+            # 2. By Day
             days_map = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
             day_name = days_map[now_wib.weekday()]
             
@@ -86,54 +68,45 @@ async def get_presensi_hari_ini(
             if by_day:
                 jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_day.kode_jam_kerja).first()
             else:
-                # 3. Dept Default (PresensiJamkerjaBydept & Detail)
-                if karyawan.kode_dept:
+                karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+                if karyawan and karyawan.kode_dept:
                     try:
                         from app.models.models import PresensiJamkerjaByDeptDetail
-                        
-                        # Logic: Find Dept Schedule -> Find Detail by Day
-                        # Join: presensi_jamkerja_bydept -> detail -> presensi_jamkerja
-                        
-                        # Note: Using join directly on models/tables
-                        # We need PresensiJamkerjaBydept (header) + t_detail + PresensiJamkerja
-                        
-                        # Since header is needed to match DEPT & CABANG
                         dept_header = db.query(PresensiJamkerjaBydept).filter(
                             PresensiJamkerjaBydept.kode_dept == karyawan.kode_dept,
                             PresensiJamkerjaBydept.kode_cabang == karyawan.kode_cabang
                         ).first()
-                        
                         if dept_header:
-                            # Find detail for today (day_name)
                             dept_detail = db.query(PresensiJamkerjaByDeptDetail).filter(
                                 PresensiJamkerjaByDeptDetail.kode_jk_dept == dept_header.kode_jk_dept,
                                 PresensiJamkerjaByDeptDetail.hari == day_name
                             ).first()
-                            
-                            if dept_detail:
-                                # dept_detail is now an ORM object
-                                
-                                # Let's query JamKerja based on found code
-                                jk_code = dept_detail.kode_jam_kerja
-                                     
-                                if jk_code:
-                                    jam_kerja_obj = db.query(PresensiJamkerja).filter(
-                                        PresensiJamkerja.kode_jam_kerja == jk_code
-                                    ).first()
+                            if dept_detail and dept_detail.kode_jam_kerja:
+                                jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == dept_detail.kode_jam_kerja).first()
                     except Exception as e:
-
-                        # Log error but don't crash. Fallback to next priority.
-                        print(f"Error in Dept Default Schedule Logic: {e}")
                         pass
 
+                # 4. Default User
+                if not jam_kerja_obj and karyawan and karyawan.kode_jadwal:
+                     jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == karyawan.kode_jadwal).first()
 
-                # 4. Default User (Karyawan.kode_jadwal)
-                if not jam_kerja_obj:
-                     # Check Karyawan.kode_jadwal first (Default Schedule)
-                     if karyawan.kode_jadwal:
-                         jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == karyawan.kode_jadwal).first()
-                     # Fallback to Karyawan.kode_jam_kerja if column exists? Most likely kode_jadwal is the one.
+    return jam_kerja_obj, presensi
 
+@router.get("/hariini")
+async def get_presensi_hari_ini(
+    nik: str = Depends(get_current_user_nik),
+    db: Session = Depends(get_db)
+):
+    # Use WIB Timezone
+    now_wib = datetime.now(WIB)
+    today = now_wib.date()
+    
+    from app.models.models import Karyawan, Cabang, KaryawanWajah, PengaturanUmum
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+    if not karyawan:
+        raise HTTPException(404, "Data Karyawan tidak ditemukan")
+        
+    jam_kerja_obj, presensi = determine_jam_kerja_hari_ini(db, nik, today, now_wib)
 
     # Get Cabang Info
     cabang = None
@@ -237,21 +210,26 @@ async def absen(
         # Check existing
         existing = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
         if existing:
-            # If exists and lintashari=1 (yesterday shift), maybe allowed? 
-            # But usually 'masuk' means new shift.
             raise HTTPException(status_code=400, detail="Anda sudah absen masuk hari ini.")
         
-        # Determine Kode Jam Kerja
+        # TENTUKAN SCHEDULE TERBAIK (JIKA KOSONG/NS DARI FRONTEND)
+        jk = None
         used_kode_jam_kerja = kode_jam_kerja if kode_jam_kerja else 'NS'
-        
-        # Check Jam Kerja Model
-        jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == used_kode_jam_kerja).first()
+        if used_kode_jam_kerja != 'NS' and used_kode_jam_kerja != '':
+            jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == used_kode_jam_kerja).first()
+
         if not jk:
-             # Fallback if provided invalid or 'NS' missing
-             jk = db.query(PresensiJamkerja).first()
-             if not jk:
-                  raise HTTPException(500, "Master Jam Kerja kosong.")
-             used_kode_jam_kerja = jk.kode_jam_kerja
+             # FALLBACK: HITUNG SENDIRI JADWAL HARI INI SECARA PINTAR
+             jam_kerja_obj, _ = determine_jam_kerja_hari_ini(db, nik, today, now)
+             if jam_kerja_obj:
+                 jk = jam_kerja_obj
+                 used_kode_jam_kerja = jk.kode_jam_kerja
+             else:
+                 # Jika benar-benar tidak ada jadwal sama sekali, fallback ke entry pertama
+                 jk = db.query(PresensiJamkerja).first()
+                 if not jk:
+                      raise HTTPException(500, "Master Jam Kerja kosong.")
+                 used_kode_jam_kerja = jk.kode_jam_kerja
         
         lintas_hari_val = 0
         # Check char '1' in DB
