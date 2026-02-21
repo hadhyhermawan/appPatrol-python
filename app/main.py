@@ -1,3 +1,4 @@
+import os; import time; os.environ["TZ"] = "Asia/Jakarta"; time.tzset()
 from fastapi import FastAPI, Depends, HTTPException, Request
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
