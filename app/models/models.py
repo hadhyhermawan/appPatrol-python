@@ -616,6 +616,10 @@ class PengaturanUmum(Base):
     latest_version_code: Mapped[Optional[int]] = mapped_column(INTEGER(11))
     update_url: Mapped[Optional[str]] = mapped_column(String(255))
     update_message: Mapped[Optional[str]] = mapped_column(Text)
+    google_maps_api_key: Mapped[Optional[str]] = mapped_column(String(255))
+    firebase_server_key: Mapped[Optional[str]] = mapped_column(String(255))
+    walkie_ws_url: Mapped[Optional[str]] = mapped_column(String(255))
+    webrtc_ws_url: Mapped[Optional[str]] = mapped_column(String(255))
 
 
 class PermissionGroups(Base):

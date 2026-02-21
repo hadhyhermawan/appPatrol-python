@@ -52,6 +52,10 @@ class GeneralSettingDTO(BaseModel):
     latest_version_code: Optional[int]
     update_url: Optional[str]
     update_message: Optional[str]
+    google_maps_api_key: Optional[str]
+    firebase_server_key: Optional[str]
+    walkie_ws_url: Optional[str]
+    webrtc_ws_url: Optional[str]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
@@ -98,6 +102,10 @@ async def update_general_setting(
     latest_version_code: Optional[int] = Form(None),
     update_url: Optional[str] = Form(None),
     update_message: Optional[str] = Form(None),
+    google_maps_api_key: Optional[str] = Form(None),
+    firebase_server_key: Optional[str] = Form(None),
+    walkie_ws_url: Optional[str] = Form(None),
+    webrtc_ws_url: Optional[str] = Form(None),
     logo: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
@@ -148,6 +156,10 @@ async def update_general_setting(
     setting.latest_version_code = latest_version_code
     setting.update_url = update_url
     setting.update_message = update_message
+    setting.google_maps_api_key = google_maps_api_key
+    setting.firebase_server_key = firebase_server_key
+    setting.walkie_ws_url = walkie_ws_url
+    setting.webrtc_ws_url = webrtc_ws_url
     setting.updated_at = datetime.now()
 
     # Handle Logo Upload

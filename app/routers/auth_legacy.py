@@ -38,11 +38,13 @@ class WalkieInfoAndroid(BaseModel):
     channels: List[Dict[str, Any]] = []
     default_channel: Optional[Dict[str, Any]] = None
     ws_base: Optional[str] = None
+    webrtc_ws_url: Optional[str] = None
 
 class AndroidLoginResponse(BaseModel):
     message: str
     token: str
     ws_url: Optional[str] = None
+    webrtc_ws_url: Optional[str] = None
     data: Optional[UserDataAndroid] = None
 
     walkie: Optional[WalkieInfoAndroid] = None
@@ -261,7 +263,16 @@ async def login_android(
     # 7. Siapkan WS URL (Link ke Python Socket.IO)
     # Walkie Talkie Raw WebSocket (Port 8081 via Nginx /walkie-ws/)
     # Fix: Point to Raw WS, NOT Python Socket.IO
-    ws_url = f"wss://frontend.k3guard.com/walkie-ws"
+    setting = db.query(PengaturanUmum).first()
+    
+    ws_url = "wss://frontend.k3guard.com/walkie-ws"
+    webrtc_url = "http://72.60.77.149:3000"
+    
+    if setting:
+        if setting.walkie_ws_url:
+            ws_url = setting.walkie_ws_url
+        if setting.webrtc_ws_url:
+            webrtc_url = setting.webrtc_ws_url
     
     # 8. Last Logins (Dummy/Real)
     last_logins = []
@@ -300,6 +311,7 @@ async def login_android(
         message="Login Berhasil",
         token=access_token,
         ws_url=ws_url,
+        webrtc_ws_url=webrtc_url,
         data=UserDataAndroid(
             id_user=user.id,
             username=user.username,
@@ -311,7 +323,8 @@ async def login_android(
         walkie=WalkieInfoAndroid(
             channels=walkie_channels_list,
             default_channel=default_channel_obj,
-            ws_base=ws_url
+            ws_base=ws_url,
+            webrtc_ws_url=webrtc_url
         )
     )
 
