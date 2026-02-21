@@ -158,6 +158,13 @@ def save_compressed_image(upload_file: UploadFile, prefix: str):
              buffer.write(image_content)
         return f"barang/{filename}"
 
+def _build_foto_url(path: str) -> Optional[str]:
+    if not path:
+        return None
+    if path.startswith(("http://", "https://")):
+        return path
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    return f"{base_url}{path}"
 
 # --- ENDPOINTS ---
 
@@ -229,12 +236,11 @@ async def list_barang(
     result = db.execute(sql, {"kode_cabang": kode_cabang, "one_month_ago": one_month_ago}).fetchall()
 
     data = []
-    base_url = "https://frontend.k3guard.com/api-py/storage/"
 
     for row in result:
         r = row._mapping
-        foto_masuk = f"{base_url}{r['foto_masuk']}" if r['foto_masuk'] else None
-        foto_keluar = f"{base_url}{r['foto_keluar']}" if r['foto_keluar'] else None
+        foto_masuk = _build_foto_url(r['foto_masuk'])
+        foto_keluar = _build_foto_url(r['foto_keluar'])
         data.append({
             "id_barang": r['id_barang'],
             "jenis_barang": r['jenis_barang'],
@@ -302,10 +308,9 @@ async def store_barang(
     )
     db.add(bm)
     db.commit()
-    db.refresh(new_barang)
+    db.refresh(bm)
 
-    base_url = "https://frontend.k3guard.com/api-py/storage/"
-    foto_masuk_url = f"{base_url}{new_barang.image}" if new_barang.image else None
+    foto_masuk_url = _build_foto_url(new_barang.image)
 
     return {
         "status": True,
@@ -369,9 +374,8 @@ async def barang_keluar(
     db.commit()
     db.refresh(bk)
 
-    base_url = "https://frontend.k3guard.com/api-py/storage/"
-    foto_keluar_url = f"{base_url}{foto_keluar_path}" if foto_keluar_path else None
-    foto_masuk_url = f"{base_url}{barang.image}" if barang.image else None
+    foto_keluar_url = _build_foto_url(foto_keluar_path)
+    foto_masuk_url = _build_foto_url(barang.image)
 
     return {
         "status": True,
