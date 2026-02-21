@@ -21,3 +21,10 @@
 - **Solution**:
   1. Frontend (Next.JS `apppatrol-admin`): Substituted standard Javascript `.toISOString()` timezone-forcing function inside `page.tsx` guest editor with a pure `substring(0, 16)` text parser. Time representations are now maintained as Native local values. Assigned `time_24hr: true` to the Flatpickr properties.
   2. Mobile Frontend (Kotlin): Removed UTC-offset assumptions within `FormatTanggal.kt`. Parsed Android DateTimes normally without converting between TimeZones since the DB serves straightforward raw strings.
+
+## 24. Implement Photo Reload Fallback Feature on Android UI
+- Date: 2026-02-21
+- Repos: GuardSystemApp-src
+- **Issue**: Due to poor network conditions, if an image fails to load initially in `TamuCardStack.kt` (e.g. guest avatar or clicked preview), the photo frame would turn blank with no way for users to manually trigger a retry. Users were forced to navigate outside the page and return just to trigger a recomposition.
+- **Solution**: Refactored `AsyncImage` into `SubcomposeAsyncImage` provided by the Coil Compose package. Implemented a `loading` indicator state and an interactive `error` layout featuring a refresh icon. When network fails, the refresh icon prompts users to literally "hit reload", modifying a local URL query parameter suffix (`?retry=SystemTime`) directly, thereby bypassing Coil's local broken cache natively within the view and restarting the image retrieval without needing to leave the screen.
+- **Status**: Tested, pushed to github `main`.
