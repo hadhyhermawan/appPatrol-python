@@ -35,3 +35,15 @@
 - **Warna & Aksi Tombol**: Mengubah _Floating Action Button_ untuk Tambah (+) dan merombak tombol "Ambil Barang" tampilannya identik kuat (Warna Hijau Green) bersama icon *log out*.
 - **Camera Viewfinder**: Kamera untuk menu "Tambah Barang" maupun "Barang Keluar" sekarang ditarik utuh dari _CameraPreview_ milik Tamu Component, sehingga kini _UI Camera_ untuk memindai barang tampil identik dengan Kamera Wajah Tamu (Ada efek tombol kedip _pulse_, lensa bundar elegan).
 - **Validasi No HP Penerima**: Limit panjang di _BarangKeluarScreen_ selaras dengan Tamu yakni 11 hingga 13 digit.
+
+## 26. Memperbaiki Jarak Detail Chip & Urutan List Barang
+- Mengubah dimensi _DetailChip_ di dalam _BarangCardStack_ dengan mematenkan kelebaran judul seukuran `60.dp` supaya sejajar rapi secara vertikal sama persis seperti pada _TamuCardStack_.
+- Menghapus modifikator `.reversed()` di UI Android (`BarangScreen.kt`) guna merawat keaslian _Sorting_ Raw SQL Backend Python supaya kondisi "_Barang Belum Diambil_ (`tgl_jam_keluar IS NULL`)" secara hierarki mendominasi letaknya di barisan teratas (sesuai Query Asli).
+
+## 27. Fix Next.js Client Request ReferenceError (Flatpickr Types)
+- Date: 2026-02-21
+- Repos: apppatrol-admin
+- **Issue**: Modifying `date-picker.tsx` caused the entire React Component chunk loading to crash natively with `Application error: a client-side exception`. This error specifically triggered off `import Hook = flatpickr.Options.Hook;` rendering logic syntax failing in production minification via SWC. Next.JS cannot execute TS Types natively.
+- **Solution**: Explicitly enforced TS type isolation inside `DatePicker` to exclude Types from runtime output. Syntactically replaced `import Hook = flatpickr.Options.Hook;` with explicit types via `type Hook = flatpickr.Options.Hook;` solving React Component errors on build. Restarted the running node instance with PM2.
+- **Status**: Implemented, built NextJS codebase without errors and fully operational on `patrol-frontend`.
+
