@@ -106,7 +106,7 @@ def _get_jam_masuk_pulang(nik: str, db: Session, today: date = None):
     if jam_kerja_obj.kode_jam_kerja == 'LIBR' or (jam_kerja_obj.nama_jam_kerja and 'Libur' in jam_kerja_obj.nama_jam_kerja):
         is_libur = True
         
-    return jam_kerja_obj.jam_masuk, jam_kerja_obj.jam_pulang, is_libur, presensi
+    return jam_kerja_obj.jam_masuk, jam_kerja_obj.jam_pulang, is_libur, presensi, jam_kerja_obj.kode_jam_kerja
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ def run_reminder_check():
                 # ─── absen_masuk ───────────────────────────────────────────
                 if setting.type == 'absen_masuk':
                     for nik in niks:
-                        jam_masuk, _, is_libur, presensi = _get_jam_masuk_pulang(nik, db, today)
+                        jam_masuk, _, is_libur, presensi, _ = _get_jam_masuk_pulang(nik, db, today)
                         if jam_masuk and not is_libur and _in_window(now, jam_masuk, setting.minutes_before):
                             # Jika belum ada tap In 
                             if not presensi or presensi.jam_in is None:
@@ -190,7 +190,7 @@ def run_reminder_check():
                 # ─── absen_pulang ──────────────────────────────────────────
                 elif setting.type == 'absen_pulang':
                     for nik in niks:
-                        _, jam_pulang, is_libur, presensi = _get_jam_masuk_pulang(nik, db, today)
+                        _, jam_pulang, is_libur, presensi, _ = _get_jam_masuk_pulang(nik, db, today)
                         if jam_pulang and not is_libur and _in_window(now, jam_pulang, setting.minutes_before):
                             # Sudah absen masuk tapi belum absen pulang
                             if presensi and presensi.jam_in is not None and presensi.jam_out is None:
@@ -198,31 +198,56 @@ def run_reminder_check():
 
                 # ─── absen_patroli ─────────────────────────────────────────
                 elif setting.type == 'absen_patroli':
+                    from app.models.models import PatrolSessions
                     patrol_schedules = db.query(PatrolSchedules).filter(
                         PatrolSchedules.is_active == True
                     ).all()
 
+                    # Optimize Karyawan lookups
+                    karyawan_dict = {k.nik: k for k in db.query(Karyawan).filter(Karyawan.nik.in_(niks)).all()}
+
                     for sch in patrol_schedules:
-                        # Filter by shift jika diset di reminder
                         if setting.target_shift and sch.kode_jam_kerja != setting.target_shift:
                             continue
 
                         if not _in_window(now, sch.start_time, setting.minutes_before):
                             continue
 
-                        # Ambil NIK semua karyawan di dept & cabang jadwal patroli
-                        patroli_niks = _get_patroli_niks(
-                            db,
-                            kode_dept=sch.kode_dept,
-                            kode_cabang=sch.kode_cabang
-                        )
+                        # Check each targeted NIK
+                        for nik in niks:
+                            kary = karyawan_dict.get(nik)
+                            if not kary: continue
 
-                        logger.info(
-                            f"[Reminder:absen_patroli] Jadwal '{sch.name}' jam {sch.start_time} "
-                            f"shift={sch.kode_jam_kerja} dept={sch.kode_dept} cabang={sch.kode_cabang} "
-                            f"→ {len(patroli_niks)} karyawan"
-                        )
-                        fire_niks.extend(patroli_niks)
+                            # 1. Pastikan jadwal ini relevan untuk Cabang & Dept karyawan
+                            if sch.kode_cabang and sch.kode_cabang != kary.kode_cabang:
+                                continue
+                            if sch.kode_dept and sch.kode_dept != kary.kode_dept:
+                                continue
+                                
+                            # 2. Pastikan jadwal kerja Karyawan sesuai dengan jadwal Patroli
+                            _, _, is_libur, _, kode_jk = _get_jam_masuk_pulang(nik, db, today)
+                            if is_libur or not kode_jk:
+                                continue
+                                
+                            if sch.kode_jam_kerja and sch.kode_jam_kerja != kode_jk:
+                                continue
+
+                            # 3. Cek apakah di rentang jadwal Patroli ini sesi karyawan (atau rekan cabangnya) sudah done
+                            # Window Schedule:
+                            start_dt = datetime.combine(today, sch.start_time)
+                            end_dt = datetime.combine(today, sch.end_time)
+                            if end_dt <= start_dt:
+                                end_dt += timedelta(days=1)
+                                
+                            # Cari PatrolSession yang beririsan
+                            sudah_patroli = db.query(PatrolSessions).filter(
+                                PatrolSessions.nik == nik,
+                                PatrolSessions.created_at >= start_dt,
+                                PatrolSessions.created_at <= end_dt
+                            ).first()
+
+                            if not sudah_patroli:
+                                fire_niks.append(nik)
 
                     fire_niks = list(set(fire_niks))
 
@@ -230,7 +255,7 @@ def run_reminder_check():
                 elif setting.type in ('cleaning_task', 'driver_task'):
                     # Reminder di jam masuk kerja masing-masing
                     for nik in niks:
-                        jam_masuk, _, is_libur, _ = _get_jam_masuk_pulang(nik, db, today)
+                        jam_masuk, _, is_libur, _, _ = _get_jam_masuk_pulang(nik, db, today)
                         if jam_masuk and not is_libur and _in_window(now, jam_masuk, setting.minutes_before):
                             fire_niks.append(nik)
 
