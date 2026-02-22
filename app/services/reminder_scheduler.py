@@ -189,7 +189,7 @@ def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: d
         else: # now_time < sch_end
             start_dt -= timedelta(days=1)
             
-    if start_dt <= now <= end_dt:
+    if start_dt <= now < end_dt:
         # Ping berulang setiap 5 menit pas (0, 5, 10, ... 55) (AUDIO ONLY)
         if now.minute % 5 == 0:
             return True, True
