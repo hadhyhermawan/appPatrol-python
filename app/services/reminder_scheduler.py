@@ -88,61 +88,25 @@ def _send_fcm_to_niks(db: Session, niks: list, title: str, body: str, reminder_t
 # ─────────────────────────────────────────────────────────────────────────────
 def _get_jam_masuk_pulang(nik: str, db: Session, today: date = None):
     """
-    Return (jam_masuk, jam_pulang) as time objects, or (None, None).
-    Pakai today dalam WIB. Jika karyawan shift malam lintas hari (presensi kemarin),
-    return jam kerja dari tanggal kemarin.
+    Return (jam_masuk, jam_pulang, is_libur, presensi_obj)
+    Hanya menggunakan determine_jam_kerja_hari_ini agar 100% akurat dengan hierarki Absensi.
     """
+    from app.routers.absensi_legacy import determine_jam_kerja_hari_ini
     if today is None:
         today = datetime.now(TZ_WIB).date()
-    yesterday = today - timedelta(days=1)
-    hari = HARI_MAP[today.weekday()]
-
-    # 0. Cek presensi aktif: hari ini atau kemarin (lintas hari)
-    for tgl in [today, yesterday]:
-        presensi = db.query(Presensi).filter(
-            Presensi.nik == nik,
-            Presensi.tanggal == tgl,
-            Presensi.jam_in != None
-        ).first()
-        if presensi and presensi.kode_jam_kerja:
-            jk = db.query(PresensiJamkerja).filter(
-                PresensiJamkerja.kode_jam_kerja == presensi.kode_jam_kerja
-            ).first()
-            if jk:
-                return jk.jam_masuk, jk.jam_pulang
-
-    # 1. By Date (hari ini)
-    jk_date = db.query(SetJamKerjaByDate).filter(
-        SetJamKerjaByDate.nik == nik, SetJamKerjaByDate.tanggal == today
-    ).first()
-    if jk_date:
-        jk = db.query(PresensiJamkerja).filter(
-            PresensiJamkerja.kode_jam_kerja == jk_date.kode_jam_kerja
-        ).first()
-        if jk:
-            return jk.jam_masuk, jk.jam_pulang
-
-    # 2. By Day
-    jk_day = db.query(SetJamKerjaByDay).filter(
-        SetJamKerjaByDay.nik == nik, SetJamKerjaByDay.hari == hari
-    ).first()
-    if jk_day:
-        jk = db.query(PresensiJamkerja).filter(
-            PresensiJamkerja.kode_jam_kerja == jk_day.kode_jam_kerja
-        ).first()
-        if jk:
-            return jk.jam_masuk, jk.jam_pulang
-
-    # 3. Default dari master karyawan
-    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
-    if karyawan and karyawan.kode_jadwal:
-        jk = db.query(PresensiJamkerja).filter(
-            PresensiJamkerja.kode_jam_kerja == karyawan.kode_jadwal
-        ).first()
-        if jk:
-            return jk.jam_masuk, jk.jam_pulang
-
-    return None, None
+        
+    now_wib = datetime.now(TZ_WIB)
+    
+    jam_kerja_obj, presensi = determine_jam_kerja_hari_ini(db, nik, today, now_wib)
+    
+    if not jam_kerja_obj:
+        return None, None, False, presensi
+        
+    is_libur = False
+    if jam_kerja_obj.kode_jam_kerja == 'LIBR' or (jam_kerja_obj.nama_jam_kerja and 'Libur' in jam_kerja_obj.nama_jam_kerja):
+        is_libur = True
+        
+    return jam_kerja_obj.jam_masuk, jam_kerja_obj.jam_pulang, is_libur, presensi
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,33 +181,19 @@ def run_reminder_check():
                 # ─── absen_masuk ───────────────────────────────────────────
                 if setting.type == 'absen_masuk':
                     for nik in niks:
-                        jam_masuk, _ = _get_jam_masuk_pulang(nik, db, today)
-                        if jam_masuk and _in_window(now, jam_masuk, setting.minutes_before):
-                            # Belum absen masuk hari ini maupun kemarin (lintas hari)
-                            yesterday = today - timedelta(days=1)
-                            sudah = db.query(Presensi).filter(
-                                Presensi.nik == nik,
-                                Presensi.tanggal.in_([today, yesterday]),
-                                Presensi.jam_in != None
-                            ).first()
-                            if not sudah:
+                        jam_masuk, _, is_libur, presensi = _get_jam_masuk_pulang(nik, db, today)
+                        if jam_masuk and not is_libur and _in_window(now, jam_masuk, setting.minutes_before):
+                            # Jika belum ada tap In 
+                            if not presensi or presensi.jam_in is None:
                                 fire_niks.append(nik)
 
                 # ─── absen_pulang ──────────────────────────────────────────
                 elif setting.type == 'absen_pulang':
                     for nik in niks:
-                        _, jam_pulang = _get_jam_masuk_pulang(nik, db, today)
-                        if jam_pulang and _in_window(now, jam_pulang, setting.minutes_before):
+                        _, jam_pulang, is_libur, presensi = _get_jam_masuk_pulang(nik, db, today)
+                        if jam_pulang and not is_libur and _in_window(now, jam_pulang, setting.minutes_before):
                             # Sudah absen masuk tapi belum absen pulang
-                            # Handle lintas hari: cek hari ini atau kemarin
-                            yesterday = today - timedelta(days=1)
-                            presensi = db.query(Presensi).filter(
-                                Presensi.nik == nik,
-                                Presensi.tanggal.in_([today, yesterday]),
-                                Presensi.jam_in != None,
-                                Presensi.jam_out == None
-                            ).first()
-                            if presensi:
+                            if presensi and presensi.jam_in is not None and presensi.jam_out is None:
                                 fire_niks.append(nik)
 
                 # ─── absen_patroli ─────────────────────────────────────────
@@ -280,8 +230,8 @@ def run_reminder_check():
                 elif setting.type in ('cleaning_task', 'driver_task'):
                     # Reminder di jam masuk kerja masing-masing
                     for nik in niks:
-                        jam_masuk, _ = _get_jam_masuk_pulang(nik, db)
-                        if jam_masuk and _in_window(now, jam_masuk, setting.minutes_before):
+                        jam_masuk, _, is_libur, _ = _get_jam_masuk_pulang(nik, db, today)
+                        if jam_masuk and not is_libur and _in_window(now, jam_masuk, setting.minutes_before):
                             fire_niks.append(nik)
 
                 if fire_niks:
