@@ -233,25 +233,31 @@ def scan_violations(
 
     # 1. Check Presensi: Late, Absent, No Checkout
     # 1. Check Presensi: Late, Absent, No Checkout
-    q_presensi = db.query(Presensi, Karyawan).join(Karyawan, Presensi.nik == Karyawan.nik).filter(Presensi.tanggal == date_scan)
+    q_presensi = db.query(Presensi, Karyawan, PresensiJamkerja).join(
+        Karyawan, Presensi.nik == Karyawan.nik
+    ).outerjoin(
+        PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja
+    ).filter(Presensi.tanggal == date_scan)
     if excluded_niks:
         q_presensi = q_presensi.filter(Presensi.nik.notin_(excluded_niks))
     presensi_list = q_presensi.all()
 
-    for p, k in presensi_list:
+    for p, k, pj in presensi_list:
         # Check Late
-        # Verify presensi_jamkerja relation exists
-        if p.jam_in and p.presensi_jamkerja:
-            jam_in_str = str(p.jam_in)
-            jam_masuk_str = str(p.presensi_jamkerja.jam_masuk)
-            if jam_in_str > jam_masuk_str:
+        if p.jam_in and pj:
+            jam_in_time_str = p.jam_in.strftime("%H:%M:%S") if hasattr(p.jam_in, 'strftime') else str(p.jam_in)[-8:]
+            if len(jam_in_time_str) > 8: # Just in case it's still datetime format like '2026-02-22 08:15:00'
+                jam_in_time_str = jam_in_time_str.split(' ')[-1]
+            jam_masuk_str = pj.jam_masuk.strftime("%H:%M:%S") if hasattr(pj.jam_masuk, 'strftime') else str(pj.jam_masuk)[:8]
+            
+            if jam_in_time_str > jam_masuk_str:
                 if is_new(p.nik, 'LATE'):
                     results.append({
                         "nik": p.nik,
                         "nama_karyawan": k.nama_karyawan,
                         "type": "Terlambat",
-                        "description": f"Check-in pada {jam_in_str} (Jadwal: {jam_masuk_str})",
-                        "timestamp": f"{date_scan} {jam_in_str}",
+                        "description": f"Check-in pada {jam_in_time_str} (Jadwal: {jam_masuk_str})",
+                        "timestamp": f"{date_scan} {jam_in_time_str}",
                         "severity": "RINGAN",
                         "violation_code": "LATE"
                     })
@@ -302,7 +308,7 @@ def scan_violations(
         q_active_karyawan = q_active_karyawan.filter(Karyawan.nik.notin_(excluded_niks))
     
     # Filter out those who already have a presensi record for today
-    presensi_niks = [p.nik for p, _ in presensi_list] # presensi_list is list of tuples (Presensi, Karyawan)
+    presensi_niks = [p.nik for p, _, _ in presensi_list]
     q_active_karyawan = q_active_karyawan.filter(Karyawan.nik.notin_(presensi_niks))
     
     potential_absent = q_active_karyawan.all()
@@ -423,7 +429,7 @@ def scan_violations(
     # Filter only Security Dept (e.g., UK3, SEC)
     # This is a bit weak without strict schedule binding.
     # Check if they are PRESENT but have 0 patrol sessions
-    security_present = [(p, k) for p, k in presensi_list if k.kode_dept in ['SEC', 'UK3', 'SAT'] and p.status == 'H']
+    security_present = [(p, k) for p, k, _ in presensi_list if k.kode_dept in ['SEC', 'UK3', 'SAT'] and p.status == 'H']
 
     for p, k in security_present:
         patrol_count = db.query(PatrolSessions).filter(
