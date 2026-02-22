@@ -313,96 +313,26 @@ def scan_violations(
     
     potential_absent = q_active_karyawan.all()
     
-    # We need to check schedule for each potential absent user
-    # Simplified schedule check (replicating logic from absensi_legacy somewhat)
-    # 1. Check By Date Extra
-    # 2. Check By Date 
-    # 3. Check By Day
-    # 4. Check Dept Default (Skip for performance? or assumes 'OFF' if not found?)
-    # 5. Check User Default (kode_jadwal)
-    
-    # Helper to check if work day
-    from app.models.models import SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerjaBydateExtra
-    
-    day_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-    scan_day_name = date_scan.strftime("%A") 
-    # Python strftime %A is English. Need Indonesian map if DB uses Indo.
-    # DB uses Indo: Senin, Selasa...
-    english_to_indo = {
-        "Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu", 
-        "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu", "Sunday": "Minggu"
-    }
-    scan_day_name_indo = english_to_indo.get(scan_day_name, "Senin")
+    # Pre-fetch HariLibur to avoid N+1 query loops
+    from app.models.models import HariLibur
+    holidays = db.query(HariLibur).filter(HariLibur.tanggal == date_scan).all()
+    holiday_cabang_codes = {h.kode_cabang for h in holidays}
 
     for k in potential_absent:
-        has_schedule = False
-        
-        # Check By Date Extra
-        extra = db.query(PresensiJamkerjaBydateExtra).filter(
-            PresensiJamkerjaBydateExtra.nik == k.nik, 
-            PresensiJamkerjaBydateExtra.tanggal == date_scan
-        ).first()
-        
-        if extra:
-             # If explicit schedule exists, they should be present.
-             # Unless it's an OFF schedule code? Assuming all codes in this table are working shifts.
-             has_schedule = True
-        else:
-             # Check By Date
-             by_date = db.query(SetJamKerjaByDate).filter(
-                 SetJamKerjaByDate.nik == k.nik,
-                 SetJamKerjaByDate.tanggal == date_scan
-             ).first()
-             
-             if by_date:
-                 has_schedule = True
-             else:
-                 # Check By Day
-                 by_day = db.query(SetJamKerjaByDay).filter(
-                     SetJamKerjaByDay.nik == k.nik,
-                     SetJamKerjaByDay.hari == scan_day_name_indo
-                 ).first()
-                 
-                 if by_day:
-                     # Check if 'OFF' or 'LIBUR' code? 
-                     # Usually codes like 'L001', 'OFF' etc.
-                     # Let's assume if it points to a Valid JamKerja, it is a schedule.
-                     # We might need to check Is Active or not 'OFF'.
-                     # For now, strict: if assigned, must attend.
-                     has_schedule = True
-                 else:
-                     # Check User Default
-                     if k.kode_jadwal:
-                         has_schedule = True
-        
-        if has_schedule:
-             # One last check: Is it a Holiday (Hari Libur)?
-             # Check HariLibur table for this Cabang
-             # If holiday, skip absent
-             is_holiday = db.query(Cabang).join(Cabang.hari_libur).filter(
-                 Cabang.kode_cabang == k.kode_cabang, 
-                 # HariLibur.tanggal == date_scan (Need proper join/filter)
-                 # Revisit HariLibur model relationship: Cabang -> HariLibur
-             ).count()
-             
-             # Direct HariLibur query is safer
-             from app.models.models import HariLibur
-             holiday = db.query(HariLibur).filter(
-                 HariLibur.tanggal == date_scan, 
-                 HariLibur.kode_cabang == k.kode_cabang
-             ).first()
-             
-             if not holiday:
-                 if is_new(k.nik, 'ABSENT'):
-                    results.append({
-                        "nik": k.nik,
-                        "nama_karyawan": k.nama_karyawan,
-                        "type": "Tidak Hadir",
-                        "description": "Memiliki jadwal kerja tetapi tidak hadir (Alpha)",
-                        "timestamp": f"{date_scan} 08:00:00",
-                        "severity": "SEDANG",
-                        "violation_code": "ABSENT"
-                    })
+        # Check if it is a holiday for this employee's branch
+        is_holiday = k.kode_cabang in holiday_cabang_codes
+
+        if not is_holiday:
+            if is_new(k.nik, 'ABSENT'):
+                results.append({
+                    "nik": k.nik,
+                    "nama_karyawan": k.nama_karyawan,
+                    "type": "Tidak Hadir",
+                    "description": "Tidak memiliki riwayat presensi / Tidak absen masuk (Alpha)",
+                    "timestamp": f"{date_scan} 08:00:00",
+                    "severity": "SEDANG",
+                    "violation_code": "ABSENT"
+                })
 
     # 2. Blocked Users (Inactive Karyawan)
     # If tanggal_nonaktif is present, they are blocked/inactive
