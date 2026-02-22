@@ -117,6 +117,32 @@ async def trigger_emergency(
         "timestamp": str(datetime.now())
     })
 
+    # Broadcast FCM Push Notification (Antar Cabang / Cross Branch)
+    try:
+        devices = db.query(KaryawanDevices).filter(KaryawanDevices.fcm_token != None).all()
+        tokens = list(set([d.fcm_token for d in devices if d.fcm_token]))
+        
+        if tokens:
+            nama_pelapor = karyawan.nama_karyawan if karyawan and karyawan.nama_karyawan else user.username
+            
+            msg = messaging.MulticastMessage(
+                data={
+                    "type": "emergency",
+                    "alarm_id": str(new_alert.id),
+                    "alarm_type": req.alarm_type,
+                    "branch_code": req.branch_code or "",
+                    "branch_name": branch_name or "Pusat",
+                    "title": "🚨 ALARM DARURAT 🚨",
+                    "body": f"SOS ditekan oleh {nama_pelapor} di {branch_name or 'lokasi tidak diketahui'}!",
+                },
+                tokens=tokens[:500],
+                android=messaging.AndroidConfig(priority='high')
+            )
+            response = messaging.send_each_for_multicast(msg)
+            print(f"SOS FCM SENT. Success: {response.success_count}, Failed: {response.failure_count}")
+    except Exception as e:
+        print(f"Failed to send SOS FCM: {e}")
+
     return {
         "status": True,
         "message": "Alarm darurat berhasil dikirim!",
