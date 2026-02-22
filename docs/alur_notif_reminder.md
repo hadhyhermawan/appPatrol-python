@@ -21,6 +21,14 @@ Sistem backend (Python FastAPI) memiliki sebuah fungsi (_task_) bernama `run_rem
     - Supaya suara OS bawaan tidak menindih _Media Player_ kustom milik aplikasi, **OS Notification Channel diset *"SUST"/BISU* 100% (`setSound(null)` pada pembuatan Android _Channel ID `reminder_channel_v2`_)**.
     - Aplikasi lalu membangkitkan layanan `MediaPlayer` tersendiri secara paralel yang memutar instruksi Vokal MP3 spesifik (`R.raw.absen_masuk` vs `R.raw.absen_pulang`) milik folder OS ke Speaker HP.
 
+### C. Simulasi Pengingat Absen Pulang (Shift Selesai) di Lapangan
+Admin K3Guard membuat peringatan otomatis: *"Ingatkan karyawan untuk **Absen Pulang** tepat 15 menit sebelum jam shift berkahir."*
+**Jadwal Pak Budi:** Shift Pagi, Jam Pulang 16:00 WIB.
+- **Pukul 15:45:** Server menyisir seluruh personil yang jadwal pulangnya pukul 16.00 WIB. Server kemudian memeriksa log tabel absensinya hari ini.
+- **Validasi Server:** *"Pak Budi tadi pagi sudah Check-In (jam_in ada isinya), TAPI kolom Check-Out (jam_out)-nya masih KOSONG"*. Karena statusnya masih *"Menggantung"* (Sedang Bekerja) di Pos, Server berhak memanggilnya.
+- **Hasil:** Layar HP Pak Budi menyala dan berteriak *"Masuk Waktu Absen Pulang...!"*, mengingatkannya untuk tidak lupa ketuk Check-Out di aplikasi sebelum ia melepas seragam dan pulang ke rumah.
+- *Pengecualian:* Jika sebelum jam 15:45 Pak Budi membolos pulang lebih awal (sudah klik *Check-out*), Server **TIDAK AKAN** membunyikan HP-nya lagi, karena transaksinya dinyatakan sudah selesai (*Closed*).
+
 ---
 
 ## 2. Alur Notifikasi Bypass & Chat
