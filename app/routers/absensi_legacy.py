@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_nik
-from app.models.models import Presensi, PresensiJamkerja
+from app.models.models import Presensi, PresensiJamkerja, Karyawan, PengaturanUmum
 from datetime import datetime, date, timedelta
 import shutil
 import os
