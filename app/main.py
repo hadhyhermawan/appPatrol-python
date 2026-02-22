@@ -138,6 +138,9 @@ from app.routers import privacy
 app_fastapi.include_router(privacy.router)
 app_fastapi.include_router(privacy.router_android)
 
+from app.routers import compliance
+app_fastapi.include_router(compliance.router_android)
+
 from app.routers import jam_kerja_legacy
 app_fastapi.include_router(jam_kerja_legacy.router) # Android Migration Jam Kerja Bulanan
 
