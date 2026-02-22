@@ -171,6 +171,24 @@ If you use `app.core.permissions.get_current_user` in an endpoint that is access
   ```
 If an API must serve both, instantiate TWO separate routers with TWO separate endpoints wrapping the same core logic.
 
+### **⚠️ COMPANION RULE: Retrofit Android Client (`ApiService.kt`)**
+
+When creating separated routers in Python (*e.g., adding `/api/android/something` for bypass*), **do not forget** to update the Android Frontend's Retrofit Paths to actually target the new `android/` route instead of the secure Web-only route.
+
+**WRONG (Android Kotlin)**:
+```kotlin
+// Targeting the Web-Only Route! Will cause HTTP 401 Force Logout for Karyawan.
+@GET("something")
+suspend fun getSomething()
+```
+
+**RIGHT (Android Kotlin)**:
+```kotlin
+// Targeting the separated Android-specific route which uses sanctum bypass.
+@GET("android/something")
+suspend fun getSomething()
+```
+
 ---
 
 ## 📋 Endpoints to Protect (Priority List)
