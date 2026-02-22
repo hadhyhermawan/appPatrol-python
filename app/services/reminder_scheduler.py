@@ -158,6 +158,41 @@ def _in_window(now: datetime, target_time: dtime, minutes_before: int) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: dtime, minutes_before: int) -> bool:
+    """
+    Untuk patroli: 
+    1. Ping H-minutes_before (seperti biasa)
+    2. Jika sudah masuk jam window (start <= now <= end), ping setiap kelipatan 5 menit.
+    """
+    now_time = now.time()
+    today_date = now.date()
+    
+    # 1. Cek H-minus (sama dengan _in_window standard)
+    target_dt  = datetime.combine(today_date, sch_start) - timedelta(minutes=minutes_before)
+    window_start = target_dt - timedelta(minutes=1)
+    window_end   = target_dt + timedelta(minutes=1)
+    if window_start <= now <= window_end:
+        return True
+        
+    # 2. Cek apakah sedang berada di DALAM window patroli
+    # Helper untuk logic melampaui tengah malam
+    start_dt = datetime.combine(today_date, sch_start)
+    end_dt = datetime.combine(today_date, sch_end)
+    if end_dt <= start_dt:
+        # Jika jadwal seperti 23:00 - 05:00
+        if now_time >= sch_start:
+            end_dt += timedelta(days=1)
+        else: # now_time < sch_end
+            start_dt -= timedelta(days=1)
+            
+    if start_dt <= now <= end_dt:
+        # Ping berulang setiap 5 menit pas (0, 5, 10, ... 55)
+        if now.minute % 5 == 0:
+            return True
+            
+    return False
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main scheduler job
 # ─────────────────────────────────────────────────────────────────────────────
 def run_reminder_check():
@@ -210,7 +245,7 @@ def run_reminder_check():
                         if setting.target_shift and sch.kode_jam_kerja != setting.target_shift:
                             continue
 
-                        if not _in_window(now, sch.start_time, setting.minutes_before):
+                        if not _is_active_patrol_window_and_due(now, sch.start_time, sch.end_time, setting.minutes_before):
                             continue
 
                         # Check each targeted NIK
