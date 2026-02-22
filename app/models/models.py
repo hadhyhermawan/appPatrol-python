@@ -1873,6 +1873,7 @@ class Violation(Base):
     bukti_foto: Mapped[Optional[str]] = mapped_column(String(255))
     source: Mapped[str] = mapped_column(Enum('MANUAL', 'SYSTEM'), server_default=text("'MANUAL'"), nullable=False)
     violation_type: Mapped[Optional[str]] = mapped_column(String(50)) 
+    is_read: Mapped[int] = mapped_column(TINYINT(1), nullable=False, server_default=text('0'), default=0)
     created_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('current_timestamp()'))
     updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(TIMESTAMP, server_default=text('current_timestamp() ON UPDATE current_timestamp()'))
 

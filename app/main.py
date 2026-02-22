@@ -157,6 +157,8 @@ app_fastapi.include_router(monitoring_regu_legacy.router) # Web Monitoring Regu 
 from app.routers import violations
 app_fastapi.include_router(violations.router) # Security Violations
 
+from app.routers import violations_android
+app_fastapi.include_router(violations_android.router) # Android Violations
 from app.routers import walkie_legacy
 app_fastapi.include_router(walkie_legacy.router) # Android Migration Walkie Channels
 app_fastapi.include_router(walkie_legacy.router_node) # Node Backend Internal Endpoints
