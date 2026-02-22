@@ -38,6 +38,7 @@ Berisi sistem lapisan tambahan yang kompleks seputar "Batas / Keliling Geografis
 - 🟦 **Biru Muda / Sian (`PATROLI_MODE`)**: Kotak *bounding box* berubah warna indikator radar Patroli menjadi Sian. Perangkat otomatis memutar lensa menjadi _Back Camera_ (Kamera Belakang).
 - 🎲 **Random Swafoto Check**: Sistem secara asinkron bisa melempar nilai acak (_Math Random_) terhadap 1 dari semua titik (Misal: Rute gedung A, B, C. Sistem memilih gedung C). 
 Saat Satpam memindai dan menekan daftar gedung C (yang terpilih), UI akan kembali ke _Force Front Camera_ (Kamera Depan) dan memaksa status *overlay* ke mode _Selfie_, menghindari kecurangan satpam hanya memotret tempat tanpa fisik di lokasi.
+- ⏸️ **Auto-Pause Liveness**: Saat layar memunculkan Modal Teguran Keras / Sanksi Disiplin (misalnya akibat lupa scan titik/Terlewat Jadwal), proses _ImageAnalysis_ pendeteksi wajah dan liveness (mata/kepala) akan otomatis mengalami _return early_ (menjeda memori) di _LaunchedEffect_ agar *camera observer* tidak menembak *error failure* secara gaib sewaktu pengguna sedang membaca peringatan.
 
 ### C. Layar Perekaman Master Wajah (`MasterWajahScreen.kt`)
 Berbeda dengan "Anti-Pemalsuan", layar ini berfungsi dominan sebagai **Mode Koleksi Studio/Pemotretan**:

@@ -101,6 +101,23 @@ Semua riwayat deteksi pelanggaran di atas otomatis mem-populasi API `get_violati
 
 ---
 
+## 5. UI Presentation & Blocking Modals (Klien Android)
+Konsekuensi dari berbagai pelanggaran (Violations) tidak sekadar menjadi rekaman log mati di Data Center, namun disajikan kembali ke pengguna di garda terdepan (Aplikasi Android Satpam) sebagai Efek Jera langsung, atau *Hard-Blocking Modal*, memutus jalan agar pengguna tidak bisa melanjutkan sebelum permasalahan diperbaiki:
+
+1. **Pelanggaran Absensi Area (Out of Radius / Bypass Modal)**  
+   Dialog peringatan saat Satpam memaksa absen sangat jauh di luar koordinat titik gedung. Menyala _Glassmorphism Modal_ yang menyajikan teks keterangan (Mengirim "Bypass Radius Request" kepada Danru) didampingi Ikon _Warning_ Orange.
+
+2. **Deteksi Manipulasi & Cheat Beraudio**  
+   Untuk status manipulasi seperti `FAKE_GPS`, `ROOTED`, `MOCK_LOCATION`, serta _Force Close App_, alur aplikasi membekukan (_freeze_) diri total dengan melukis Modal _Glassmorphism_ Merah Menyala *"PELANGGARAN KEAMANAN"*.
+
+3. **Pelanggaran Kedisiplinan Patroli**  
+   Bila jam operasional Satpam menemukan `MISSED_PATROL`, sebelum `PatroliScreen.kt` mulai mendeteksi *CameraX* (Selfie Log), ia dibajak oleh *Modal* Disipliner berjudul *"SANKSI TEGAS HINGGA PHK"*.  
+   Sebagai catatan: Selama modal Sanksi Disiplin dituang di layar (Status: Menyala / Tampil), alur *LaunchEffect* milik **Liveness Detection & OpenCV Verifikasi Wajah akan dijeda serentak** (_return early/pause_) menghindari sistem kelebihan-aksi (_Over-processing_ / error mendadak diam) sewaktu pengguna bersusah memproses teks sanksi tersebut.
+
+Seluruh jajaran modal interupsi ini dikemas elegan *(Premium Look)* dengan bayangan pekat buram (_Background Scrim_ 0xAA000000), tepian kartu melengkung 28dp, plus properti Jetpack Compose **`dismissOnBackPress = false` / `dismissOnClickOutside = false`** yang anti-batal, membuat sang oknum tak mampu lari dari teguran.
+
+---
+
 ## 5. Optimalisasi UI/UX (Frontend Next.js)
 
 Selain perombakan pada mesin Backend SQL, telah dilakukan penyesuaian signifikan pada sisi antarmuka klien (`/security/violations/page.tsx`) untuk memastikan ribuan data pelanggaran dapat dikelola oleh Admin dengan optimal:
