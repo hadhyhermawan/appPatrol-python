@@ -105,44 +105,10 @@ def get_notification_summary(db: Session = Depends(get_db)):
     mock_count = q_mock.count()
 
     # 5. Radius Violation (Active Shift & Out of Radius)
-    q_active = db.query(Presensi.lokasi_in, Karyawan.nik, Cabang.lokasi_cabang, Cabang.radius_cabang) \
-        .join(Karyawan, Presensi.nik == Karyawan.nik) \
-        .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang) \
-        .filter(
-            Presensi.tanggal == today,
-            Presensi.jam_in != None,
-            Presensi.jam_out == None,
-            Presensi.lokasi_in != None,
-            Cabang.lokasi_cabang != None,
-            Cabang.radius_cabang > 0,
-            Karyawan.lock_location == '1'
-        )
-    
+    q_outloc = db.query(SecurityReports).filter(SecurityReports.type == 'OUT_OF_LOCATION', SecurityReports.status_flag == 'pending')
     if excluded_niks:
-        q_active = q_active.filter(Karyawan.nik.notin_(excluded_niks))
-        
-    active_presensi = q_active.all()
-
-    radius_violation_count = 0
-    for p in active_presensi:
-        try:
-            user_lat, user_long = map(float, p.lokasi_in.split(','))
-            office_lat, office_long = map(float, p.lokasi_cabang.split(','))
-            
-            # Haversine Formula
-            R = 6371000 
-            dLat = math.radians(office_lat - user_lat)
-            dLon = math.radians(office_long - user_long)
-            a = math.sin(dLat/2) * math.sin(dLat/2) + \
-                math.cos(math.radians(user_lat)) * math.cos(math.radians(office_lat)) * \
-                math.sin(dLon/2) * math.sin(dLon/2)
-            c_val = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-            distance = R * c_val
-            
-            if distance > p.radius_cabang:
-                radius_violation_count += 1
-        except:
-            continue
+        q_outloc = q_outloc.filter(SecurityReports.nik.notin_(excluded_niks))
+    radius_violation_count = q_outloc.count()
 
     # 6. Force Close Reports
     q_force_close = db.query(SecurityReports).filter(SecurityReports.type == 'APP_FORCE_CLOSE', SecurityReports.status_flag == 'pending')
@@ -209,60 +175,37 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
     } for m in mocks]
 
     # Radius Violations
-    today = date.today()
-    q_active = db.query(Presensi.lokasi_in, Presensi.jam_in, Karyawan.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, Cabang.lokasi_cabang, Cabang.radius_cabang) \
-        .join(Karyawan, Presensi.nik == Karyawan.nik) \
-        .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang) \
-        .filter(
-            Presensi.tanggal == today,
-            Presensi.jam_in != None,
-            Presensi.jam_out == None,
-            Presensi.lokasi_in != None,
-            Cabang.lokasi_cabang != None,
-            Cabang.radius_cabang > 0,
-            Karyawan.lock_location == '1'
-        )
-        
+    q_outloc = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.detail, SecurityReports.created_at)\
+             .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
+             .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+             .filter(SecurityReports.type == 'OUT_OF_LOCATION', SecurityReports.status_flag == 'pending')\
+             .order_by(SecurityReports.created_at.desc())
+             
     if excluded_niks:
-        q_active = q_active.filter(Karyawan.nik.notin_(excluded_niks))
-
-    active_presensi = q_active.limit(50).all()
+        q_outloc = q_outloc.filter(SecurityReports.nik.notin_(excluded_niks))
+        
+    outloc_alerts = q_outloc.limit(5).all()
 
     radius_data = []
-    for p in active_presensi:
+    for p in outloc_alerts:
+        distance_val = 0
         try:
-            time_val = None
-            if p.jam_in:
-                if isinstance(p.jam_in, datetime):
-                    time_val = p.jam_in
-                else: 
-                    time_val = datetime.combine(today, p.jam_in)
-
-            user_lat, user_long = map(float, p.lokasi_in.split(','))
-            office_lat, office_long = map(float, p.lokasi_cabang.split(','))
-            
-            R = 6371000 
-            dLat = math.radians(office_lat - user_lat)
-            dLon = math.radians(office_long - user_long)
-            a = math.sin(dLat/2) * math.sin(dLat/2) + \
-                math.cos(math.radians(user_lat)) * math.cos(math.radians(office_lat)) * \
-                math.sin(dLon/2) * math.sin(dLon/2)
-            c_val = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-            distance = R * c_val
-            
-            if distance > p.radius_cabang:
-                radius_data.append({
-                    "nik": p.nik,
-                    "nama": p.nama_karyawan,
-                    "cabang": p.nama_cabang,
-                    "time": time_val,
-                    "type": "OUT_OF_LOCATION",
-                    "distance": int(distance),
-                    "radius": p.radius_cabang
-                })
-                if len(radius_data) >= 5: break
-        except Exception as e:
-            continue
+             import re
+             m = re.search(r'Jarak:\s*(\d+)m', str(p.detail))
+             if m: distance_val = int(m.group(1))
+        except:
+             pass
+             
+        radius_data.append({
+            "id": p.id,
+            "nik": p.nik,
+            "nama": p.nama_karyawan,
+            "cabang": p.nama_cabang,
+            "time": p.created_at,
+            "type": "OUT_OF_LOCATION",
+            "distance": distance_val,
+            "radius": 0
+        })
 
     # Device Logic
     q_device = db.query(Karyawan.nik, Karyawan.nama_karyawan, Cabang.nama_cabang)\
