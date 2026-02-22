@@ -54,6 +54,8 @@ def get_violations(
     date_start: Optional[date] = None,
     date_end: Optional[date] = None,
     type: Optional[str] = None,
+    kode_cabang: Optional[str] = None,
+    kode_dept: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     today = date.today()
@@ -107,6 +109,11 @@ def get_violations(
             # Don't block list fetching
 
     query = db.query(Violation).join(Karyawan, Violation.nik == Karyawan.nik)
+
+    if kode_cabang:
+        query = query.filter(Karyawan.kode_cabang == kode_cabang)
+    if kode_dept:
+        query = query.filter(Karyawan.kode_dept == kode_dept)
 
     if search:
         search_filter = f"%{search}%"
