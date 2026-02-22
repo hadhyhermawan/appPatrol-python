@@ -8,8 +8,13 @@ from app.models.terms import TermsAndConditions
 from app.core.permissions import get_current_user, CurrentUser
 
 router = APIRouter(
-    prefix="/terms",
+    prefix="/api/terms",
     tags=["Terms and Conditions"]
+)
+
+router_android = APIRouter(
+    prefix="/api/android/terms",
+    tags=["Terms and Conditions (Android)"]
 )
 
 class TermsBase(BaseModel):
@@ -37,6 +42,7 @@ class TermsResponse(TermsBase):
 
 # GET active terms for mobile app (requires authentication)
 @router.get("/active", response_model=TermsResponse)
+@router_android.get("/active", response_model=TermsResponse)
 def get_active_terms(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user)

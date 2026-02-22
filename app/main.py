@@ -132,6 +132,7 @@ app_fastapi.include_router(verify_face_legacy.router)
 
 from app.routers import terms
 app_fastapi.include_router(terms.router)
+app_fastapi.include_router(terms.router_android)
 
 from app.routers import jam_kerja_legacy
 app_fastapi.include_router(jam_kerja_legacy.router) # Android Migration Jam Kerja Bulanan
