@@ -63,7 +63,9 @@ Sistem Python akan mencari `kode_jam_kerja` yang tepat dengan urutan **Fallback 
    Bila departemen pun tidak mengaturnya, lihat data Dasar / Profile Inti `karyawan.kode_jadwal` sebagai pertahanan terakhir. 
 
 **Catatan Sinkronisasi UI Jadwal Bulanan Android:**
-Mulai 22 Februari 2026, API endpoint pembaca Jadwal (*`/api/android/jamkerja/bulanan`*) khusus layar **Kalender Riwayat** di HP Karyawan juga telah mengadopsi 100% secara _apple-to-apple_ hierarki di atas. Hal ini menjamin bahwa shift harian maupun bulanan yang muncul di UI kalender Android tidak akan pernah meleset penanggalannya dari ketetapan _Server_.
+Mulai 22 Februari 2026, API endpoint pembaca Jadwal (*`/api/android/jamkerja/bulanan`*) dan pembaca Riwayat Jadwal Patroli (*`/api/android/patroli/getPatrolHistory`*) di HP Karyawan juga telah mengadopsi 100% secara _apple-to-apple_ hierarki di atas (termasuk penggunaan kolom `kode_jadwal` secara presisi jika aturan _override_ maupun _department_ tidak ditemukan). Hal ini menjamin bahwa shift harian maupun bulanan yang muncul di UI kalender Android tidak akan pernah meleset penanggalannya dari ketetapan _Server_.
+
+Adapun catatan khusus untuk riwayat patroli: *Respons payload* JSON (_data class_) untuk Kotlin *Gson* harus sama strukturnya dengan payload yang dilontarkan dari *getAbsenPatrol* (memiliki elemen *karyawan*, *points* kosongan, *hari_ini*, *sessionId*, dan *tombol_aktif*) agar tidak memicu `NullPointerException` (Crash/Gagal Parse/Blank).
 
 ---
 

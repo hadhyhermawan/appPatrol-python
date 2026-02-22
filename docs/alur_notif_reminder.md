@@ -56,7 +56,13 @@ Inilah urutan eksekusi alarm di lapangan:
 3. **Kasus Patrol 3 & 4 - Berlaku Sama Seterusnya:**
    - Karena di tahap sebelumnya Pak Budi sudah terdeteksi Sah hadir kerja dari Pagi, saat jam menunjuk pukul `11:55` (Pra-Patrol 3), ia akan mendapat 1 Push Notifikasi Teks. Jika abai lagi, siklus _Ping_ gaib audio per-5 menitnya akan menyerang kembali di rentang `12:00-14:00`, begitupun untuk siklus tahap akhir di Patrol 4 Pra-Kepulangan. Penderitaan audio akan terus memburuku selama titik-titik tersebut tidak diselesaikan/di-scan aplikasinya.
 
-4. **Klausa Eksepsi Tumpang-Tindih Murni (Skenario Pukul `14:00:00` Pas):**
+4. **Skenario Patroli Tim (Anggota Cabang & Departemen yang Sama):**
+   - Misalkan di jadwal Patrol 4 (`14:00 - 16:00`), ada dua orang karyawan dengan kode departemen, cabang, dan jam kerja yang sama persis: **Pak Budi** dan **Andi**.
+   - Pada pukul `14:00`, Budi sudah menjalankan patroli untuk sesi waktu tersebut.
+   - Pukul `14:05`, ketika *Scheduler* mencoba menagih Andi, *Backend* kini (_mulai 22 Februari 2026_) mengecek histori `PatrolSessions` secara kolektif berdasar rekan se-cabang dan se-departemen (`group_niks`).
+   - **Hasil:** Karena Budi (rekan satu tim Andi) sudah mengerjakan jadwal tersebut, rentang khusus jadwal ini dianggap sudah tuntas secara komunal. HP Andi (maupun Budi dan kawan-kawannya) **TIDAK AKAN** mendapatkan notifikasi paksaan / spam *reminder audio* lagi untuk sesi ini.
+
+5. **Klausa Eksepsi Tumpang-Tindih Murni (Skenario Pukul `14:00:00` Pas):**
    - Apa yang terjadi jika Pak Budi mengabaikan Patrol 3 (12:00-14:00) hingga waktu murni menginjak detik pergantian shift tepat pada **Pukul 14:00:00**?
    - Server memiliki batas ambang waktu **Eksklusif ("Kurang Dari")**. Begitu jarum menaruh pada pukul `14:00:00`, sistem secara otomatis menyematkan tiket "**Missed/Terlewat**" untuk jadwal Patrol 3 dan secara murni cuma melayani periode _Shift Patrol 4 (14:00 - 15:59:59)_.
    - **Hasil:** Pak Budi **TIDAK AKAN** mendengar tabrakan tembakan ganda / alarm ganda di jam 14.00, karena Patrol 3 dinyatakan resmi gugur (*Expired*) di saat yang bersamaan dengan awal mula Patrol 4.

@@ -513,7 +513,6 @@ async def store_patroli_point(
     point.updated_at = datetime.now()
     
     db.commit()
-    
     # Check Complete
     remaining = db.query(PatrolPoints).filter(PatrolPoints.patrol_session_id == session.id, PatrolPoints.jam == None).count()
     if remaining == 0:
@@ -523,13 +522,37 @@ async def store_patroli_point(
         
     foto_url = f"https://frontend.k3guard.com/api-py/storage/uploads/patroli/{subfolder}/{fname}"
     
+    # Retrieve all points to send back (Kotlin UI needs this to update step state and redirect to Beranda)
+    all_points = db.query(PatrolPoints).filter(PatrolPoints.patrol_session_id == session.id).all()
+    points_resp = []
+    next_p_id = None
+    if session.status == 'active':
+        next_p_temp = get_next_point_by_order(session.id, db)
+        if next_p_temp:
+            next_p_id = next_p_temp.id
+            
+    for p in all_points:
+        tombol_aktif = (p.id == next_p_id) if session.status == 'active' else False
+        points_resp.append({
+            "id": p.id,
+            "patrol_point_master_id": p.patrol_point_master_id,
+            "patrol_session_id": p.patrol_session_id,
+            "foto": p.foto,
+            "lokasi": p.lokasi,
+            "jam": str(p.jam) if p.jam else None,
+            "tombol_aktif": tombol_aktif,
+            "created_at": str(p.created_at) if p.created_at else None,
+            "updated_at": str(p.updated_at) if p.updated_at else None
+        })
+    
     return {
         "status": True,
         "message": "Titik Berhasil Disimpan",
         "foto_url": foto_url,
         "remaining_points": remaining,
         "session_status": session.status,
-        "lock_location": "1" # Todo: fetch from karyawan
+        "lock_location": "1", # Todo: fetch from karyawan
+        "points": points_resp
     }
 
 
@@ -589,9 +612,9 @@ def _resolve_jam_kerja_for_date(nik: str, kode_cabang: str, kode_dept: str,
 
     # 4. Master karyawan
     karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
-    if karyawan and karyawan.kode_jam_kerja:
+    if karyawan and karyawan.kode_jadwal:
         jk = db.query(PresensiJamkerja).filter(
-            PresensiJamkerja.kode_jam_kerja == karyawan.kode_jam_kerja
+            PresensiJamkerja.kode_jam_kerja == karyawan.kode_jadwal
         ).first()
         if jk:
             return jk, presensi
@@ -773,7 +796,21 @@ async def get_patrol_history(
     return {
         "status": True,
         "message": f"History fetched. TaskCount:{len(tasks)}",
-        "data": {"schedule_tasks": tasks}
+        "sessionId": None,
+        "sudah_absen": False,
+        "tombol_aktif": False,
+        "data": {
+            "hari_ini": str(today),
+            "patrol_session": None,
+            "schedule_tasks": tasks,
+            "karyawan": {
+                "nik": karyawan.nik,
+                "nama_karyawan": karyawan.nama_karyawan,
+                "lock_location": karyawan.lock_location,
+                "face_recognition": False
+            },
+            "points": []
+        }
     }
 
 

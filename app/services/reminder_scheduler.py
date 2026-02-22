@@ -244,6 +244,7 @@ def run_reminder_check():
 
                     # Optimize Karyawan lookups
                     karyawan_dict = {k.nik: k for k in db.query(Karyawan).filter(Karyawan.nik.in_(niks)).all()}
+                    group_niks_cache = {}
                     
                     audio_niks = []
 
@@ -285,9 +286,20 @@ def run_reminder_check():
                             if end_dt <= start_dt:
                                 end_dt += timedelta(days=1)
                                 
+                            cache_key = f"{kary.kode_cabang}_{kary.kode_dept}"
+                            if cache_key not in group_niks_cache:
+                                group_niks_cache[cache_key] = [
+                                    r[0] for r in db.query(Karyawan.nik).filter(
+                                        Karyawan.kode_cabang == kary.kode_cabang,
+                                        Karyawan.kode_dept   == kary.kode_dept
+                                    ).all()
+                                ]
+                                
+                            group_niks = group_niks_cache[cache_key]
+                                
                             # Cari PatrolSession yang beririsan
                             sudah_patroli = db.query(PatrolSessions).filter(
-                                PatrolSessions.nik == nik,
+                                PatrolSessions.nik.in_(group_niks),
                                 PatrolSessions.created_at >= start_dt,
                                 PatrolSessions.created_at <= end_dt
                             ).first()
