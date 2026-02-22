@@ -64,7 +64,7 @@ def get_active_privacy_android(
     return privacy
 
 # GET all privacy policies for admin dashboard
-@router.get("/", response_model=List[PrivacyResponse])
+@router.get("", response_model=List[PrivacyResponse])
 def get_all_privacies(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user) # Ideally specific permission like Depends(require_permission_dependency('privacy.view'))
@@ -72,7 +72,7 @@ def get_all_privacies(
     return db.query(PrivacyPolicy).order_by(PrivacyPolicy.updated_at.desc()).all()
 
 # POST create new privacy policy
-@router.post("/", response_model=PrivacyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PrivacyResponse, status_code=status.HTTP_201_CREATED)
 def create_privacy(
     privacy: PrivacyCreate,
     db: Session = Depends(get_db),

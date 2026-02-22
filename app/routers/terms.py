@@ -64,7 +64,7 @@ def get_active_terms_android(
     return terms
 
 # GET all terms for admin dashboard
-@router.get("/", response_model=List[TermsResponse])
+@router.get("", response_model=List[TermsResponse])
 def get_all_terms(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user)
@@ -73,7 +73,7 @@ def get_all_terms(
     return db.query(TermsAndConditions).order_by(TermsAndConditions.created_at.desc()).all()
 
 # POST create new terms (admin)
-@router.post("/", response_model=TermsResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=TermsResponse, status_code=status.HTTP_201_CREATED)
 def create_terms(
     terms: TermsCreate,
     db: Session = Depends(get_db),
