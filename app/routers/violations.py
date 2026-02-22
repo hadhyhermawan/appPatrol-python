@@ -80,27 +80,26 @@ def get_violations(
             # scan_violations currently DOES NOT save. It checks 'is_new' against DB then returns list.
             
             for d in detected:
-                # We only want to auto-save 'ABSENT' type
-                if d['violation_code'] == 'ABSENT':
-                    # Double check existence to be sure (race condition)
-                    exists = db.query(Violation).filter(
-                        Violation.nik == d['nik'],
-                        Violation.tanggal_pelanggaran == today,
-                        Violation.violation_type == 'ABSENT'
-                    ).first()
-                    
-                    if not exists:
-                        new_v = Violation(
-                            nik=d['nik'],
-                            tanggal_pelanggaran=today,
-                            jenis_pelanggaran='SEDANG', # Default for Absent
-                            keterangan=d['description'],
-                            sanksi='',
-                            status='OPEN',
-                            source='SYSTEM',
-                            violation_type='ABSENT'
-                        )
-                        db.add(new_v)
+                # We want to auto-save ALL system-detected violations
+                # Double check existence to be sure (race condition)
+                exists = db.query(Violation).filter(
+                    Violation.nik == d['nik'],
+                    Violation.tanggal_pelanggaran == str(d['timestamp']).split(' ')[0],
+                    Violation.violation_type == d['violation_code']
+                ).first()
+                
+                if not exists:
+                    new_v = Violation(
+                        nik=d['nik'],
+                        tanggal_pelanggaran=str(d['timestamp']).split(' ')[0],
+                        jenis_pelanggaran=d['severity'],
+                        keterangan=d['description'],
+                        sanksi='',
+                        status='OPEN',
+                        source='SYSTEM',
+                        violation_type=d['violation_code']
+                    )
+                    db.add(new_v)
             
             db.commit()
         except Exception as e:
