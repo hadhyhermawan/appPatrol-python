@@ -29,6 +29,12 @@ Admin K3Guard membuat peringatan otomatis: *"Ingatkan karyawan untuk **Absen Pul
 - **Hasil:** Layar HP Pak Budi menyala dan berteriak *"Masuk Waktu Absen Pulang...!"*, mengingatkannya untuk tidak lupa ketuk Check-Out di aplikasi sebelum ia melepas seragam dan pulang ke rumah.
 - *Pengecualian:* Jika sebelum jam 15:45 Pak Budi membolos pulang lebih awal (sudah klik *Check-out*), Server **TIDAK AKAN** membunyikan HP-nya lagi, karena transaksinya dinyatakan sudah selesai (*Closed*).
 
+### D. Simulasi Pengingat Absen Patroli (Shift Titik)
+Sama dengan presensi harian, patroli kini difilter secara cerdas bukan berdasarkan asal tebak anggota departemen, melainkan dengan memeriksa **Kesesuaian Shift Karyawan** dengan **Batas Waktu Patroli (Time Window)**.
+- **Pukul 22:45**: Jadwal Patroli Gedung B dijadwalkan pada `23:00 - 00:00`.
+- **Validasi Server**: Server mendata *seluruh* Satpam di Shift Malam hari itu. Lalu memindai tabel `patrol_sessions` untuk meneliti apakah di antara rentang waktu tersebut *sudah ada* Satpam yang berkeliling atau menekan *Mulai Patroli*.
+- **Hasil**: Apabila belum ada satupun yang berkeliling, alarm "Waktunya Patroli..." akan menyala di semua HP Satpam Shift Malam tersebut. Namun jika satu orang saja dari rekan satu timnya sudah mulai absen keliling, Server membatalkan notifikasi (karena tugasnya sudah diwakilkan/diselesaikan).
+
 ---
 
 ## 2. Alur Notifikasi Bypass & Chat
