@@ -44,11 +44,6 @@ async def get_jadwal_bulanan(
     except ValueError:
         return {"status": False, "message": "Bulan atau Tahun tidak valid."}
 
-    from app.models.models import (
-        SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerja, Karyawan, 
-        PresensiJamkerjaBydept, PresensiJamkerjaBydeptDetail, PresensiJamkerjaBydateExtra
-    )
-
     # 3. Cache all Jam Kerja master data
     jamkerjas = db.query(PresensiJamkerja).all()
     jk_map = {jk.kode_jam_kerja: jk for jk in jamkerjas}
