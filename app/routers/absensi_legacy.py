@@ -350,6 +350,9 @@ async def absen(
                     
                 batas_akhir_pulang = jadwal_pulang + timedelta(hours=batas_absen_pulang)
                 
+                if now < jadwal_pulang:
+                    raise HTTPException(403, f"Belum waktunya absen pulang. Anda baru bisa pulang pukul {jadwal_pulang.strftime('%H:%M WIB')} atau setelahnya.")
+                    
                 if now > batas_akhir_pulang:
                     raise HTTPException(403, "Batas waktu absen pulang berakhir.")
                     
