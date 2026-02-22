@@ -330,16 +330,28 @@ def scan_violations(
         is_holiday = k.kode_cabang in holiday_cabang_codes
 
         if not is_holiday:
-            if is_new(k.nik, 'ABSENT'):
-                results.append({
-                    "nik": k.nik,
-                    "nama_karyawan": k.nama_karyawan,
-                    "type": "Tidak Hadir",
-                    "description": "Tidak memiliki riwayat presensi / Tidak absen masuk (Alpha)",
-                    "timestamp": f"{date_scan} 08:00:00",
-                    "severity": "SEDANG",
-                    "violation_code": "ABSENT"
-                })
+            from app.routers.absensi_legacy import determine_jam_kerja_hari_ini
+            from datetime import datetime
+            import pytz
+            now_wib = datetime.now(pytz.timezone('Asia/Jakarta'))
+            # Fake the time part to 12 PM so early/late shift logic doesn't mess with date_scan determination
+            scan_time_wib = now_wib.replace(year=date_scan.year, month=date_scan.month, day=date_scan.day, hour=12, minute=0, second=0)
+            
+            # Determine schedule using the robust legacy mechanism
+            jam_kerja, _ = determine_jam_kerja_hari_ini(db, k.nik, date_scan, scan_time_wib)
+            
+            # If the user literally has NO work schedule mapped to today, don't flag them as Absent!
+            if jam_kerja:
+                if is_new(k.nik, 'ABSENT'):
+                    results.append({
+                        "nik": k.nik,
+                        "nama_karyawan": k.nama_karyawan,
+                        "type": "Tidak Hadir",
+                        "description": "Tidak memiliki riwayat presensi / Tidak absen masuk (Alpha)",
+                        "timestamp": f"{date_scan} 08:00:00",
+                        "severity": "SEDANG",
+                        "violation_code": "ABSENT"
+                    })
 
     # 2. Blocked Users (Inactive Karyawan)
     # If tanggal_nonaktif is present, they are blocked/inactive
@@ -429,13 +441,17 @@ def scan_violations(
     report_map = {
         'FAKE_GPS': 'Terdeteksi Fake GPS (FCM)',
         'APP_FORCE_CLOSE': 'Aplikasi Force Close',
-        'FACE_VERIFICATION_FAILED': 'Gagal Verifikasi Wajah'
+        'FACE_VERIFICATION_FAILED': 'Gagal Verifikasi Wajah',
+        'RADIUS_BYPASS': 'Melanggar Batas Radius Absensi',
+        'OUT_OF_LOCATION': 'Melanggar Batas Radius Patroli'
     }
     
     code_map = {
         'FAKE_GPS': 'FAKE_GPS',
         'APP_FORCE_CLOSE': 'FORCE_CLOSE',
-        'FACE_VERIFICATION_FAILED': 'FACE_VERIFY_FAIL'
+        'FACE_VERIFICATION_FAILED': 'FACE_VERIFY_FAIL',
+        'RADIUS_BYPASS': 'OUT_OF_LOCATION',
+        'OUT_OF_LOCATION': 'OUT_OF_LOCATION'
     }
 
     for r, k in reports:
