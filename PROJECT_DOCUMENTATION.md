@@ -47,3 +47,21 @@
 - **Solution**: Explicitly enforced TS type isolation inside `DatePicker` to exclude Types from runtime output. Syntactically replaced `import Hook = flatpickr.Options.Hook;` with explicit types via `type Hook = flatpickr.Options.Hook;` solving React Component errors on build. Restarted the running node instance with PM2.
 - **Status**: Implemented, built NextJS codebase without errors and fully operational on `patrol-frontend`.
 
+## 28. Real-time Live Tracking Radius Violation & Push Notification
+- Date: 2026-02-22
+- Repos: appPatrol-python
+- **Issue**: Previously, the "Out of Location" detection relied on static check-in coordinates from the `Presensi` table. It didn't actively monitor if a guard left the branch radius during an active shift. Also, the notification summary API calculated this manually instead of relying on a centralized system.
+- **Solution**: 
+  1. Updated `violations.py` to use live `EmployeeLocationHistories` coordinates to check if a user is out of radius while their `Presensi` status is working (`jam_in` exists, no `jam_out`).
+  2. Implemented active tracking checks in `tracking_legacy.py` when receiving location updates. If out of bounds, it stores an `OUT_OF_LOCATION` event in the `SecurityReports` table and immediately fires an FCM Multicast Push Notification to peers in the same branch, constrained by a 1-hour cooldown.
+  3. Streamlined `notifications.py` to fetch `radius_violation` alerts directly from `SecurityReports`.
+- **Status**: Implemented, tested, and actively detecting radius violations dynamically.
+
+## 29. Frontend Notification Dropdown & Sidebar Badge Synchronization
+- Date: 2026-02-22
+- Repos: apppatrol-admin
+- **Issue**: The notification dropdown links for "Pengajuan Izin" and "Lembur" were broken. Sidebar menu for "Pengajuan Absen" did not show a notification badge when there were pending requests.
+- **Solution**:
+  1. Replaced `DropdownItem` with native Next.js `Link` components in the Approvals section of `NotificationDropdown.tsx` to ensure hydration and routing trigger correctly.
+  2. Subscribed `AppSidebar.tsx` to the backend `/api/security/notifications/summary` polling every 60s, using an anti-cache timestamp (`?t=timestamp`) to bypass persistent Next.js router cache. Displayed a dynamic red badge counter next to precisely the "Pengajuan Absen" menu item.
+- **Status**: Tested on production, built successfully without eslint errors via PM2.
