@@ -301,7 +301,6 @@ async def get_absen_patrol(
         start_datetime = datetime.combine(tanggal, sch.start_time)
         
         # Lintas Hari Logic (if shift crosses midnight and schedule is 'early morning', it belongs to next day relative to shift start)
-        # Simplified logic from Laravel: if jam_kerja.lintashari (boolean/1) AND sched < shift_start -> add day
         # Checking lintashari attribute existence first
         is_lintashari = getattr(jam_kerja, 'lintashari', 0) == 1 or getattr(jam_kerja, 'lintashari', '0') == '1'
         
@@ -324,7 +323,13 @@ async def get_absen_patrol(
         is_done = False
         for sess in today_sessions:
             if sess.jam_patrol:
-                sess_dt = datetime.combine(sess.tanggal, sess.jam_patrol)
+                # Perhatikan bahwa jika lintashari aktif dan jam patroli kurang dari jam masuk, 
+                # sesi tersebut milik 'hari berikutnya' di kalender.
+                sess_date_base = sess.tanggal
+                if is_lintashari and sess.jam_patrol < jam_kerja.jam_masuk:
+                    sess_date_base = sess_date_base + timedelta(days=1)
+                
+                sess_dt = datetime.combine(sess_date_base, sess.jam_patrol)
                 if start_datetime <= sess_dt <= end_datetime:
                     is_done = True
                     break
@@ -647,7 +652,12 @@ def _build_schedule_tasks_for_day(
     tasks = []
     for sch in schedules:
         start_dt = datetime.combine(target_date, sch.start_time)
-        end_dt   = datetime.combine(target_date, sch.end_time)
+        
+        is_lintashari = getattr(jam_kerja, 'lintashari', 0) == 1 or getattr(jam_kerja, 'lintashari', '0') == '1'
+        if is_lintashari and sch.start_time < jam_kerja.jam_masuk:
+            start_dt = start_dt + timedelta(days=1)
+            
+        end_dt = datetime.combine(start_dt.date(), sch.end_time)
         if end_dt <= start_dt:
             end_dt += timedelta(days=1)
 
@@ -670,7 +680,7 @@ def _build_schedule_tasks_for_day(
             status = 'pending'
             executor_name = None
 
-        date_str = target_date.strftime('%d %b')
+        date_str = start_dt.strftime('%d %b')
         tasks.append({
             'id': sch.id,
             'name': f"{sch.name or 'Patroli'} ({sch.start_time.strftime('%H:%M')}-{sch.end_time.strftime('%H:%M')})",
