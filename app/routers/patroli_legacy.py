@@ -418,7 +418,6 @@ async def patroli_absen(
         dist = haversine_great_circle_distance(ulat, ulon, clat, clon)
         if dist > cabang.radius_cabang:
             try:
-                from app.models.models import SecurityReports
                 rep = SecurityReports(
                     nik=nik,
                     type='OUT_OF_LOCATION',
