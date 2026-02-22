@@ -49,7 +49,7 @@ def _get_patroli_niks(db: Session, kode_dept: str = None, kode_cabang: str = Non
 # ─────────────────────────────────────────────────────────────────────────────
 # FCM Helper
 # ─────────────────────────────────────────────────────────────────────────────
-def _send_fcm_to_niks(db: Session, niks: list, title: str, body: str, reminder_type: str):
+def _send_fcm_to_niks(db: Session, niks: list, title: str, body: str, reminder_type: str, audio_only: bool = False):
     if not niks:
         return
 
@@ -71,16 +71,19 @@ def _send_fcm_to_niks(db: Session, niks: list, title: str, body: str, reminder_t
         return
 
     # Kirim menggunakan fcm.py (force IPv4, tidak hang)
-    results = fcm_send(tokens, {
+    payload = {
         "type":          "reminder",
         "reminder_type": reminder_type,
         "title":         title,
         "body":          body,
-    })
+        "audio_only":    "true" if audio_only else "false"
+    }
+    results = fcm_send(tokens, payload)
 
     ok  = sum(1 for r in results if r.get("status") == 200)
     err = len(results) - ok
-    logger.info(f"[Reminder:{reminder_type}] Terkirim {ok}/{len(tokens)} device | gagal={err}")
+    aud_str = " (AUDIO ONLY)" if audio_only else ""
+    logger.info(f"[Reminder:{reminder_type}]{aud_str} Terkirim {ok}/{len(tokens)} device | gagal={err}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +103,7 @@ def _get_jam_masuk_pulang(nik: str, db: Session, today: date = None):
     jam_kerja_obj, presensi = determine_jam_kerja_hari_ini(db, nik, today, now_wib)
     
     if not jam_kerja_obj:
-        return None, None, False, presensi
+        return None, None, False, presensi, None
         
     is_libur = False
     if jam_kerja_obj.kode_jam_kerja == 'LIBR' or (jam_kerja_obj.nama_jam_kerja and 'Libur' in jam_kerja_obj.nama_jam_kerja):
@@ -158,11 +161,12 @@ def _in_window(now: datetime, target_time: dtime, minutes_before: int) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: dtime, minutes_before: int) -> bool:
+def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: dtime, minutes_before: int):
     """
     Untuk patroli: 
-    1. Ping H-minutes_before (seperti biasa)
-    2. Jika sudah masuk jam window (start <= now <= end), ping setiap kelipatan 5 menit.
+    1. Ping H-minutes_before (seperti biasa) -> Full Notif (return True, False)
+    2. Jika sudah masuk jam window (start <= now <= end), ping setiap kelipatan 5 menit -> Audio Only (return True, True)
+    Kembalian: (should_ping, audio_only)
     """
     now_time = now.time()
     today_date = now.date()
@@ -172,7 +176,7 @@ def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: d
     window_start = target_dt - timedelta(minutes=1)
     window_end   = target_dt + timedelta(minutes=1)
     if window_start <= now <= window_end:
-        return True
+        return True, False
         
     # 2. Cek apakah sedang berada di DALAM window patroli
     # Helper untuk logic melampaui tengah malam
@@ -186,11 +190,11 @@ def _is_active_patrol_window_and_due(now: datetime, sch_start: dtime, sch_end: d
             start_dt -= timedelta(days=1)
             
     if start_dt <= now <= end_dt:
-        # Ping berulang setiap 5 menit pas (0, 5, 10, ... 55)
+        # Ping berulang setiap 5 menit pas (0, 5, 10, ... 55) (AUDIO ONLY)
         if now.minute % 5 == 0:
-            return True
+            return True, True
             
-    return False
+    return False, False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main scheduler job
@@ -240,12 +244,15 @@ def run_reminder_check():
 
                     # Optimize Karyawan lookups
                     karyawan_dict = {k.nik: k for k in db.query(Karyawan).filter(Karyawan.nik.in_(niks)).all()}
+                    
+                    audio_niks = []
 
                     for sch in patrol_schedules:
                         if setting.target_shift and sch.kode_jam_kerja != setting.target_shift:
                             continue
 
-                        if not _is_active_patrol_window_and_due(now, sch.start_time, sch.end_time, setting.minutes_before):
+                        should_ping, is_audio_only = _is_active_patrol_window_and_due(now, sch.start_time, sch.end_time, setting.minutes_before)
+                        if not should_ping:
                             continue
 
                         # Check each targeted NIK
@@ -260,11 +267,15 @@ def run_reminder_check():
                                 continue
                                 
                             # 2. Pastikan jadwal kerja Karyawan sesuai dengan jadwal Patroli
-                            _, _, is_libur, _, kode_jk = _get_jam_masuk_pulang(nik, db, today)
+                            _, _, is_libur, presensi, kode_jk = _get_jam_masuk_pulang(nik, db, today)
                             if is_libur or not kode_jk:
                                 continue
                                 
                             if sch.kode_jam_kerja and sch.kode_jam_kerja != kode_jk:
+                                continue
+                                
+                            # SYARAT MUTLAK: Karyawan harus sudah hadir (Absen Masuk) hari ini.
+                            if not presensi or presensi.jam_in is None:
                                 continue
 
                             # 3. Cek apakah di rentang jadwal Patroli ini sesi karyawan (atau rekan cabangnya) sudah done
@@ -282,9 +293,25 @@ def run_reminder_check():
                             ).first()
 
                             if not sudah_patroli:
-                                fire_niks.append(nik)
+                                if is_audio_only:
+                                    audio_niks.append(nik)
+                                else:
+                                    fire_niks.append(nik)
 
                     fire_niks = list(set(fire_niks))
+                    
+                    # Buang nik di audio yang sudah ada di fire_niks (kembar)
+                    audio_niks = list(set(audio_niks) - set(fire_niks))
+                    
+                    if audio_niks:
+                        _send_fcm_to_niks(
+                            db=db,
+                            niks=audio_niks,
+                            title=setting.label,
+                            body=setting.message,
+                            reminder_type=setting.type,
+                            audio_only=True
+                        )
 
                 # ─── cleaning_task / driver_task ───────────────────────────
                 elif setting.type in ('cleaning_task', 'driver_task'):
