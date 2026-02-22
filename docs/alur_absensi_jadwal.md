@@ -107,4 +107,13 @@ Jika karyawan telah absen masuk dan bekerja namun **lupa untuk menekan tombol Ab
 3. Untuk mencegah rancu lembur pada laporan Payroll sistem, kolom `jam_out` tidak akan diisi waktu pemrosesan Auto-Close, melainkan **dibiarkan kosong (`NULL`)**. 
 4. Saat halaman Web Admin maupun HP mendeteksi kehadiran status `'ta'`, UI tidak akan meminta absen pulang (berkedip merah) melainkan menampilkan label **"— (Ditutup Otomatis)"**.
 
+## 7. Penanganan Jadwal Patroli Lintas Hari (Cross-Midnight)
+Pada fitur Jadwal Patroli, ada skenario di mana sebuah shift melintasi tengah malam (contoh: Shift Sore II `16:00 - 08:00`), dan di dalam shift tersebut terdapat tugas patroli yang dijadwalkan pada dini hari (contoh: `01:00`).
+
+Sistem menangani ini dengan dua lapis penyesuaian:
+1. **Sisi Backend (API Python)**: 
+   Fungsi penyusun daftar tugas (`_build_schedule_tasks_for_day` dan rute terkait) akan mendeteksi properti `is_lintashari` dari objek jam kerja. Jika aktif, dan jam mulai tugas patroli lebih kecil dari jam masuk shift utama (artinya tugas dieksekusi setelah lewat tengah malam), maka sistem akan secara otomatis menambahkan `+1 hari` (`timedelta(days=1)`) pada nilai parameter kalender `start_datetime` dan `end_datetime` absolut tugas tersebut. Hal ini membuat komparasi waktu nyata menjadi valid di alam semesta (ISO8601).
+2. **Sisi Aplikasi Android (Kotlin UI)**:
+   Untuk keperluan visualisasi kalender (pengelompokan berdasarkan tanggal shift referensi), data `ScheduleTask` memiliki variabel khusus tambahan bernama `date`. Hal ini memampukan UI di aplikasi (`JadwalPatroliScreen.kt` & `PatrolCalendarCard.kt`) untuk menggabungkan dan mengurutkan secara kronologis tugas patroli rutin jam `01:00` dini hari agar tetap tampil selaras masuk di bawah kelompok payung shift "Tanggal Masuk" utamanya, bukan terlempar dan mengacak di hari berikutnya akibat perbedaan _substring_ tanggal absolut.
+
 `(Dokumentasi dihasilkan dan diperbarui otomatis oleh Asisten Antigravity pada 22/02/2026)`
