@@ -67,6 +67,11 @@ Mulai 22 Februari 2026, API endpoint pembaca Jadwal (*`/api/android/jamkerja/bul
 
 Adapun catatan khusus untuk riwayat patroli: *Respons payload* JSON (_data class_) untuk Kotlin *Gson* harus sama strukturnya dengan payload yang dilontarkan dari *getAbsenPatrol* (memiliki elemen *karyawan*, *points* kosongan, *hari_ini*, *sessionId*, dan *tombol_aktif*) agar tidak memicu `NullPointerException` (Crash/Gagal Parse/Blank).
 
+**Catatan UI Kalender Jadwal Kerja (Android):**
+Pada `JadwalKerjaScreen` (Jadwal Kerja Bulanan), indikator Shift tidak lagi menggunakan _badge_ (balon atau kotak warna). Sistem me-render status shift dengan merubah *warna font* dari angka tanggal itu sendiri:
+- Angka akan **Menebal (Bold)** dan mengikuti warna klasifikasi (misal: Merah untuk Malam, Hijau untuk Pagi, Kuning/Siang, Abu-abu untuk Libur).
+- Hal ini dirancang agar kotak kalender (GridView) tetap terlihat ringkas dan tidak memakan terlalu banyak ruang (_Clean & Minimalist Look_).
+
 ---
 
 ## 3. Fitur Pencegah Bencana Shift Malam / _Early Tolerance_
