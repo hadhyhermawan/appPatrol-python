@@ -271,6 +271,23 @@ async def absen(
                       raise HTTPException(500, "Master Jam Kerja kosong.")
                  used_kode_jam_kerja = jk.kode_jam_kerja
         
+        if not jk:
+            jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == used_kode_jam_kerja).first()
+            
+        # Logic Kunci Jam Kerja (Bounds) untuk Masuk
+        karyawan_check = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+        if karyawan_check and str(karyawan_check.lock_jam_kerja) == '1' and setting and str(setting.batasi_absen) == '1' and jk:
+            batas_absen = int(setting.batas_jam_absen) if setting.batas_jam_absen else 0
+            jadwal_masuk_str = f"{today.strftime('%Y-%m-%d')} {jk.jam_masuk.strftime('%H:%M:%S')}"
+            jadwal_masuk = datetime.strptime(jadwal_masuk_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WIB)
+            batas_akhir_masuk = jadwal_masuk + timedelta(hours=batas_absen)
+            batas_awal_masuk = jadwal_masuk - timedelta(hours=3) # Allow 3 hours early max
+            
+            if now > batas_akhir_masuk:
+                raise HTTPException(403, "Batas waktu absen masuk berakhir.")
+            if now < batas_awal_masuk:
+                raise HTTPException(403, "Belum waktunya absen masuk.")
+                
         lintas_hari_val = 0
         # Check char '1' in DB
         if str(jk.lintashari) == '1':
@@ -317,6 +334,25 @@ async def absen(
         if presensi.jam_out:
              raise HTTPException(status_code=400, detail="Anda sudah absen pulang sebelumnya.")
              
+        # Logic Kunci Jam Kerja (Bounds) untuk Pulang
+        karyawan_check = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+        if karyawan_check and str(karyawan_check.lock_jam_kerja) == '1' and setting and str(setting.batasi_absen) == '1':
+            jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == presensi.kode_jam_kerja).first()
+            if jk:
+                batas_absen_pulang = int(setting.batas_jam_absen_pulang) if setting.batas_jam_absen_pulang else 0
+                
+                # Konversi timezone safe timestamp untuk jadwal pulang
+                jadwal_pulang_str = f"{presensi.tanggal.strftime('%Y-%m-%d')} {jk.jam_pulang.strftime('%H:%M:%S')}"
+                jadwal_pulang = datetime.strptime(jadwal_pulang_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WIB)
+                
+                if str(jk.lintashari) == '1':
+                    jadwal_pulang = jadwal_pulang + timedelta(days=1)
+                    
+                batas_akhir_pulang = jadwal_pulang + timedelta(hours=batas_absen_pulang)
+                
+                if now > batas_akhir_pulang:
+                    raise HTTPException(403, "Batas waktu absen pulang berakhir.")
+                    
         presensi.jam_out = now
         presensi.foto_out = db_image_path
         presensi.lokasi_out = lokasi
