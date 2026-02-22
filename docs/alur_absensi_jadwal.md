@@ -62,6 +62,9 @@ Sistem Python akan mencari `kode_jam_kerja` yang tepat dengan urutan **Fallback 
 6. **Kolom `kode_jadwal` Karyawan (Dasar)**
    Bila departemen pun tidak mengaturnya, lihat data Dasar / Profile Inti `karyawan.kode_jadwal` sebagai pertahanan terakhir. 
 
+**Catatan Sinkronisasi UI Jadwal Bulanan Android:**
+Mulai 22 Februari 2026, API endpoint pembaca Jadwal (*`/api/android/jamkerja/bulanan`*) khusus layar **Kalender Riwayat** di HP Karyawan juga telah mengadopsi 100% secara _apple-to-apple_ hierarki di atas. Hal ini menjamin bahwa shift harian maupun bulanan yang muncul di UI kalender Android tidak akan pernah meleset penanggalannya dari ketetapan _Server_.
+
 ---
 
 ## 3. Fitur Pencegah Bencana Shift Malam / _Early Tolerance_
