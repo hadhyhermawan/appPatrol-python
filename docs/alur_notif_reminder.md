@@ -29,17 +29,32 @@ Admin K3Guard membuat peringatan otomatis: *"Ingatkan karyawan untuk **Absen Pul
 - **Hasil:** Layar HP Pak Budi menyala dan berteriak *"Masuk Waktu Absen Pulang...!"*, mengingatkannya untuk tidak lupa ketuk Check-Out di aplikasi sebelum ia melepas seragam dan pulang ke rumah.
 - *Pengecualian:* Jika sebelum jam 15:45 Pak Budi membolos pulang lebih awal (sudah klik *Check-out*), Server **TIDAK AKAN** membunyikan HP-nya lagi, karena transaksinya dinyatakan sudah selesai (*Closed*).
 
-### D. Simulasi Pengingat Absen Patroli (Skema Ping Berulang per 5 Menit)
-Sama dengan presensi harian, patroli difilter berdasarkan kesesuaian Shift aslinya. Namun sistem Patroli kini mengadopsi fitur **Snooze/Ping Agresif**; akan berteriak sampai titik tersebut dikerjakan atau waktunya habis.
-Anggaplah jadwal **Patrol 1** disetel dari pukul `08:00 - 10:00` pagi.
-**Jadwal Pak Budi:** Shift Pagi `08:00 - 16:00`.
-- **Pukul 07:45 (-15m):** Server melempar sinyal pelatuk awal *"Waktunya masuk sesi patroli!"*. Pak Budi tidak merespon (Mungkin sedang di toilet).
-- **Pukul 08:00 (Awal Sesi):** Awal rentang patroli. Pak Budi maupun teman seregunya belum ada yang menekan "Mulai Patroli" di aplikasi. Server melempar ping lagi.
-- **Pukul 08:05, 08:10, 08:15:** Selama rentangan waktu ini aktif, Server **akan terus menembak ping pengingat keras setiap kelipatan 5 menit pas** *(0, 5, 10, ...)* ke HP Pak Budi untuk memaksanya keliling.
-- **Penyelesaian Mutlak:** Pada pukul `08:13`, Pak Budi kesal HP-nya bergetar terus, akhirnya dia membuka aplikasi dan *Mulai Patroli* di titik pertama. Maka pada pukul `08:15` dan seterusnya, pelatuk otomatis mati (*Server melihat Sesi Patroli 1 sudah berstatus aktif/selesai*). 
+### D. Simulasi Pengingat Absen Patroli (Push Awal + Mode Ping Audio Berulang)
+Sistem Patroli K3Guard memiliki tingkat ketegasan (**Snooze Agresif**) khusus. Syarat mutlaknya: Karyawan wajib sudah melakukan "Absen Masuk" kerja dulu di hari itu! Selanjutnya, Notifikasi _Pop-Up text_ hanya dikirim **satu kali** di awal, disusul teror _Ping Audio_ setiap 5 menit gaib di latar belakang agar layar HP tidak kepenuhan spam.
 
-**Pengecualian Lintas Sesi (Skipping Terminated Schedules)**
-- Jika sampai pukul `10:01` Pak Budi membolos patroli sama sekali, sistem akan menyematkan rentang `08:00-10:00` itu dengan status *Missed* (Terlewat). Server **tidak akan** lagi melakukan _Ping Patroli_ terkait "Patrol 1" tersebut, dan akan diam *(Idle)* hingga mendekati rentang "Patrol 2" (`10:00 - 12:00`).
+**Anggaplah Data Pak Budi (NIK: `1801042008930002`):**
+- Shift : `SF PAGI (08:00:00 - 16:00:00)`.
+- Jadwal Patroli di *Dashboard* ada 4: 
+  - Patrol 1 (`08:00 - 10:00`)
+  - Patrol 2 (`10:00 - 12:00`)
+  - Patrol 3 (`12:00 - 14:00`)
+  - Patrol 4 (`14:00 - 16:00`)
+
+Inilah urutan eksekusi alarm di lapangan:
+
+1. **Kasus Patrol 1 (`08:00 - 10:00`) - Gagal Ping Karena Belum Absen Masuk:**
+   - **Pukul 07:55**: Server bersiap melempar peringatan *"Waktunya Patrol 1!"*. Namun saat dicek ke tabel Presensi, `jam_in` Pak Budi ternyata masih KOSONG (Dia belum datang ngantor).
+   - **Hasil**: Server **menggugurkan peringatan**. HP Pak Budi diam 100%. Bahkan selama rentang 08:00, 08:05, hingga 10:00 tidak ada _Ping Audio_ sama sekali karena sistem menganggapnya belum hadir (Tidak boleh menagih pekerjaan ke orang yang tidak ada).
+   - *Catatan: Jika rentang ini telanjat habis (10:01) dan belum dikerjakan, Patrol 1 otomatis gugur dan dianggap "Missed" / Tidak Dikerjakan.*
+
+2. **Kasus Patrol 2 (`10:00 - 12:00`) - Fungsi Normal & Audio Berulang:**
+   - **Pukul 08:30**: Pak Budi akhirnya sampai di Pos dan mengetuk "Check-In" (*Absen Masuk Pagi*).
+   - **Pukul 09:55**: Menjelang jadwal Patrol 2, server mengecek lagi. Karena status masuk kerjanya sekarang sudah _Valid_, Server menembakkan Pelatuk Penuh: Layar HP menyala dengan Notifikasi Visual: *"Waktunya memulai Patrol 2!"* disertai memutar Vokal MP3 Peringatan Patroli.
+   - **Pukul 10:00, 10:05, 10:10... dst:** Memasuki periode aktif, Pak Budi rupanya sedang ngopi. Daripada menimbun banner di Layar HP, Server mengirim balok gaib ber-_flag_ `audio_only: true`. HP Pak Budi di saku secara ajaib berteriak menggaungkan vokal Peringatan MP3 setiap kelipatan 5 Menit tanpa henti!
+   - **Resolusi (Penyelesaian):** Di pukul `10:12` karena risih dibully HP-nya, Pak Budi membuka aplikasi lalu menjalankan Patroli (Scan NFC ke-1). Pada pukul `10:15` dan seterusnya, rentang tugas di jam ini dianggap sudah *Active/Done*, pelatuk alarm otomatis mati serentak. Pak Budi tenang kembali.
+
+3. **Kasus Patrol 3 & 4 - Berlaku Sama Seterusnya:**
+   - Karena di tahap sebelumnya Pak Budi sudah terdeteksi Sah hadir kerja dari Pagi, saat jam menunjuk pukul `11:55` (Pra-Patrol 3), ia akan mendapat 1 Push Notifikasi Teks. Jika abai lagi, siklus _Ping_ gaib audio per-5 menitnya akan menyerang kembali di rentang `12:00-14:00`, begitupun untuk siklus tahap akhir di Patrol 4 Pra-Kepulangan. Penderitaan audio akan terus memburuku selama titik-titik tersebut tidak diselesaikan/di-scan aplikasinya.
 
 ---
 
