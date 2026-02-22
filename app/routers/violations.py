@@ -498,63 +498,56 @@ def scan_violations(
                 "violation_code": "FAKE_GPS"
             })
 
-    # 6. Out of Location / Radius Violation (Simplified Logic)
-    # Replicating Laravel's complex SQL in Python ORM is heavy.
-    # For now, we check Presensi locations if they are far from office.
-    # We will assume a simple check: if Presensi has checked in but location (jam_in) is suspicious.
-    # Ideally, this needs Haversine calc against Cabang location.
-    # Implementing a basic version:
-    
-    # Get active presensi with check-in data
-    q_active = db.query(Presensi, Karyawan, Cabang).join(
-        Karyawan, Presensi.nik == Karyawan.nik
+    # 6. Out of Location / Radius Violation (Live Tracking Check)
+    # Checks live location streams from EmployeeLocationHistories
+    import math
+
+    q_tracking = db.query(EmployeeLocationHistories, Karyawan, Cabang).join(
+        Karyawan, EmployeeLocationHistories.nik == Karyawan.nik
     ).join(
         Cabang, Karyawan.kode_cabang == Cabang.kode_cabang
     ).filter(
-        Presensi.tanggal == date_scan,
-        Presensi.jam_in != None,
-        Presensi.lokasi_in != None,
-        Cabang.lokasi_cabang != None,
+        func.date(EmployeeLocationHistories.recorded_at) == date_scan,
+        Karyawan.lock_location == '1',
         Cabang.radius_cabang > 0,
-        Karyawan.lock_location == '1'
+        Cabang.lokasi_cabang != None
     )
     
     if excluded_niks:
-        q_active = q_active.filter(Karyawan.nik.notin_(excluded_niks))
+        q_tracking = q_tracking.filter(EmployeeLocationHistories.nik.notin_(excluded_niks))
         
-    active_presensi = q_active.all()
+    trackings = q_tracking.all()
 
-    for p, k, c in active_presensi:
-        try:
-            # Parse lat,long from strings "lat,long"
-            user_lat, user_long = map(float, p.lokasi_in.split(','))
-            office_lat, office_long = map(float, c.lokasi_cabang.split(','))
+    for loc, k, c in trackings:
+        # Check if already processed to avoid expensive distance calculations and duplicates
+        if not is_new(k.nik, 'OUT_OF_LOCATION'):
+            continue
             
-            # Haversine Formula
-            import math
-            R = 6371000 # Earth radius in meters
-            dLat = math.radians(office_lat - user_lat)
-            dLon = math.radians(office_long - user_long)
+        try:
+            of_lat, of_lon = map(float, c.lokasi_cabang.split(','))
+            u_lat, u_lon = float(loc.latitude), float(loc.longitude)
+            
+            dLat = math.radians(of_lat - u_lat)
+            dLon = math.radians(of_lon - u_lon)
             a = math.sin(dLat/2) * math.sin(dLat/2) + \
-                math.cos(math.radians(user_lat)) * math.cos(math.radians(office_lat)) * \
+                math.cos(math.radians(u_lat)) * math.cos(math.radians(of_lat)) * \
                 math.sin(dLon/2) * math.sin(dLon/2)
             c_val = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-            distance = R * c_val
+            distance = 6371000 * c_val
             
             if distance > c.radius_cabang:
-                 if is_new(k.nik, 'OUT_OF_LOCATION'):
-                    results.append({
-                        "nik": k.nik,
-                        "nama_karyawan": k.nama_karyawan,
-                        "type": "Di Luar Radius Kantor",
-                        "description": f"Absen di luar radius ({int(distance)}m > {c.radius_cabang}m)",
-                        "timestamp": str(p.jam_in),
-                        "severity": "SEDANG",
-                        "violation_code": "OUT_OF_LOCATION"
-                    })
-
-        except Exception as e:
-            # Skip invalid coordinates
+                 results.append({
+                     "nik": k.nik,
+                     "nama_karyawan": k.nama_karyawan,
+                     "type": "Di Luar Radius Kantor",
+                     "description": f"Terdeteksi lokasi di luar jangkauan saat bertugas ({int(distance)}m > {int(c.radius_cabang)}m)",
+                     "timestamp": str(loc.recorded_at),
+                     "severity": "SEDANG",
+                     "violation_code": "OUT_OF_LOCATION"
+                 })
+                 # Prevent multiple entries for the same NIK
+                 existing_map.add((k.nik, 'OUT_OF_LOCATION'))
+        except Exception:
             continue
 
     return results
