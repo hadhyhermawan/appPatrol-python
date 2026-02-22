@@ -7,8 +7,11 @@ Sistem backend (Python FastAPI) memiliki sebuah fungsi (_task_) bernama `run_rem
 
 ### A. Alur Kerja _Backend_ (Server)
 1. **Deteksi Aturan**: Server membaca konfigurasi peringatan dari tabel `reminder_settings` di Database. Tabel ini menyimpan target penerima (Level Jabatan/Role, Cabang, Departemen), toleransi menit, dan pesannya.
-2. **Hitung Jendela Waktu (_Time Window_)**: Jika konfigurasinya "_Ingatkan Absen Masuk 15 Menit Sebelumnya_", server mencari siapa saja personil target yang **Jam Masuk**-nya akan berbunyi di Jendela Waktu rentang *[Sekarang]* hingga *[(Sekarang + 15 Menit) + Toleransi detik keterlambatan]* pada hari ini secara presisi (WIB). Server mengenali *shift* jadwal masing-masing personal melalui hierarki yang sama dengan penentu Absensi (_Override_ ➔ Tanggal ➔ Hari ➔ Umum).
-3. **Penyaringan Karyawan Absen**: Server membandingkan target di atas dengan log tabel transaksi absensi. **Jika karyawan sudah terdeteksi melaksanakan Absen Masuk** sebelum menit ke-15 tersebut, nama karyawan itu **dicoret** dari daftar, untuk mencegah _spam_ yang memekakkan kuping di markas Cabang.
+2. **Sinkronisasi Algoritma Jadwal (Hierarki Presisi)**: Server mengenali *shift* jadwal masing-masing personal melalui fungsi tunggal `determine_jam_kerja_hari_ini`. Ini adalah hierarki mutlak yang sama 100% yang di-desain untuk Absensi (*Ekstra* ➔ *Tanggal* ➔ *Hari/Roster* ➔ *Departemen* ➔ *Umum*). 
+3. **Penyaringan Karyawan Absen & Libur**: 
+   - Server membandingkan target di atas dengan log tabel transaksi absensi yang dikembalikan fungsi penentu di atas. 
+   - Jika saat ini HP Karyawan terasosiasi dengan kode `"LIBR"` atau kalimat *"Libur"*, dia tidak akan di-ping.
+   - **Jika karyawan sudah terdeteksi melaksanakan ketukan** sebelum menit pengingat tersebut (*`jam_in is not None`* untuk Pagi / *`jam_out is not None`* untuk Sore), nama karyawan itu secara otomatis **dicoret** dari daftar, untuk mencegah *spam* yang memekakkan kuping.
 4. **Push ke FCM**: Sisa NIK yang lolos penyaringan akan dikumpulkan `fcm_token`-nya. Lalu Server Firebase menembakkan notifikasi asinkronus ke HP Karyawan dengan JSON Payload tipe `"reminder"` dan *subtype* (Misal: `absen_masuk`, `absen_pulang`, atau `absen_patroli`).
 
 ### B. Alur Kerja _Android_ (Penerima)
