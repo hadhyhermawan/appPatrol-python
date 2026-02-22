@@ -98,3 +98,19 @@ Berikut pemetaan kode status (*violation_codes*) yang secara otomatis terekstras
 | `BLOCKED` | Akun Terblokir | BERAT | HRD telah mengisi *record* nonaktif. |
 
 Semua riwayat deteksi pelanggaran di atas otomatis mem-populasi API `get_violations` tanpa admin harus mencari *filter* secara manual.
+
+---
+
+## 5. Optimalisasi UI/UX (Frontend Next.js)
+
+Selain perombakan pada mesin Backend SQL, telah dilakukan penyesuaian signifikan pada sisi antarmuka klien (`/security/violations/page.tsx`) untuk memastikan ribuan data pelanggaran dapat dikelola oleh Admin dengan optimal:
+
+1. **Client-Side Pagination Bypass:**
+   Secara *default*, FastAPI Backend menahan batas `per_page=10` jika tidak diminta secara spesifik, yang mengakibatkan penomoran (pagination) Javascript di *Browser* gagal menghitung puluhan ribu total row aslinya (hanya terjebak di pesan "1 - 10 dari 10 Data").
+   **Perbaikan yang diterapkan:** Mendorong parameter paksa `?per_page=5000` dari *Frontend* ketika mengambil data List _Violations_ agar seluruh data turun dalam satu _request_ dan bisa dibagikan halamannya secara visual murni oleh _React Table_.
+
+2. **Smart Filter (Departemen & Cabang):**
+   Guna meringankan HRD ketika _merazia_ riwayat pelanggaran Alpha:
+   - Backend `get_violations` telah di-ekspansi untuk mendukung pelemparan _query param_ `kode_dept` dan `kode_cabang`.
+   - Menggunakan relasi SQL-Join sederhana (`Karyawan.kode_dept == kode_dept`).
+   - Pada antarmuka Web Next.js, filter ini disajikan melalui _Select Dropdown_ yang cerdas (`<SearchableSelect>`). Seluruh *list* departemen diekstrak dari fungsi _options_ secara asinkron saat awal `useEffect()`. Setiap terjadi perubahan klik, halaman seketika bereaksi instan merestrukturisasi daftar tabel *(Live Sync)*.
