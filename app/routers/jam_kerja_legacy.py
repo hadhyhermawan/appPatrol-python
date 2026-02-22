@@ -5,9 +5,8 @@ from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
 from app.models.models import (
     Presensi, PresensiJamkerja, Userkaryawan, Karyawan, 
-    SetJamKerjaByDay, SetJamKerjaByDate
+    SetJamKerjaByDay, SetJamKerjaByDate, PresensiJamkerjaBydept, PresensiJamkerjaBydeptDetail, PresensiJamkerjaBydateExtra
 )
-# Note: Detailsetjamkerjabydept imports might be tricky if not in models.py, 
 # but for basic roster/regular schedule logic, Date & Day tables are primary.
 
 from datetime import datetime, date, timedelta
@@ -45,26 +44,48 @@ async def get_jadwal_bulanan(
     except ValueError:
         return {"status": False, "message": "Bulan atau Tahun tidak valid."}
 
-    # 3. Fetch Roster (Specific Date Schedule)
-    # Join SetJamKerjaByDate with PresensiJamkerja
-    roster_records = db.query(SetJamKerjaByDate, PresensiJamkerja)\
-        .join(PresensiJamkerja, SetJamKerjaByDate.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
-        .filter(SetJamKerjaByDate.nik == nik)\
-        .filter(extract('month', SetJamKerjaByDate.tanggal) == month)\
-        .filter(extract('year', SetJamKerjaByDate.tanggal) == year)\
-        .all()
-        
-    roster_map = {r.SetJamKerjaByDate.tanggal: r.PresensiJamkerja for r in roster_records}
+    from app.models.models import (
+        SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerja, Karyawan, 
+        PresensiJamkerjaBydept, PresensiJamkerjaBydeptDetail, PresensiJamkerjaBydateExtra
+    )
 
-    # 4. Fetch Regular Schedule (By Day Name)
-    # Join SetJamKerjaByDay with PresensiJamkerja
-    regular_records = db.query(SetJamKerjaByDay, PresensiJamkerja)\
-        .join(PresensiJamkerja, SetJamKerjaByDay.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
-        .filter(SetJamKerjaByDay.nik == nik)\
-        .all()
-        
-    # Map 'Senin' -> JamKerja obj
-    regular_map = {r.SetJamKerjaByDay.hari: r.PresensiJamkerja for r in regular_records}
+    # 3. Cache all Jam Kerja master data
+    jamkerjas = db.query(PresensiJamkerja).all()
+    jk_map = {jk.kode_jam_kerja: jk for jk in jamkerjas}
+
+    # 4. Fetch User Priorities
+    # Priority 0: Extra Date
+    extra_date_records = db.query(PresensiJamkerjaBydateExtra).filter(
+        PresensiJamkerjaBydateExtra.nik == nik,
+        extract('month', PresensiJamkerjaBydateExtra.tanggal) == month,
+        extract('year', PresensiJamkerjaBydateExtra.tanggal) == year
+    ).all()
+    extra_date_map = {r.tanggal: r.kode_jam_kerja for r in extra_date_records}
+
+    # Priority 1: Roster Date
+    roster_records = db.query(SetJamKerjaByDate).filter(
+        SetJamKerjaByDate.nik == nik,
+        extract('month', SetJamKerjaByDate.tanggal) == month,
+        extract('year', SetJamKerjaByDate.tanggal) == year
+    ).all()
+    roster_map = {r.tanggal: r.kode_jam_kerja for r in roster_records}
+
+    # Priority 2: Regular Day
+    regular_records = db.query(SetJamKerjaByDay).filter(SetJamKerjaByDay.nik == nik).all()
+    regular_map = {r.hari: r.kode_jam_kerja for r in regular_records}
+
+    # Priority 3: Dept Day
+    dept_map = {}
+    if karyawan.kode_dept:
+        dept_header = db.query(PresensiJamkerjaBydept).filter(
+            PresensiJamkerjaBydept.kode_dept == karyawan.kode_dept,
+            PresensiJamkerjaBydept.kode_cabang == karyawan.kode_cabang
+        ).first()
+        if dept_header:
+            dept_details = db.query(PresensiJamkerjaBydeptDetail).filter(
+                PresensiJamkerjaBydeptDetail.kode_jk_dept == dept_header.kode_jk_dept
+            ).all()
+            dept_map = {d.hari: d.kode_jam_kerja for d in dept_details}
 
     # 5. Fetch Actual Presensi (Realisasi)
     presensi_records = db.query(Presensi).filter(
@@ -98,19 +119,31 @@ async def get_jadwal_bulanan(
             "jam_pulang": None,
             "is_roster": False,
             "jam_absen_masuk": None,
-            "jam_absen_pulang": None
+            "jam_absen_pulang": None,
+            "status": None
         }
         
-        # Logic Priority: Roster -> Regular
-        jk_obj = None
+        # Logic Priority: Extra Date -> Roster Date -> Regular Day -> Dept Day -> Default
+        final_kode = None
         is_roster = False
         
-        if curr in roster_map:
-            jk_obj = roster_map[curr]
+        if curr in extra_date_map:
+            final_kode = extra_date_map[curr]
+            is_roster = True
+        elif curr in roster_map:
+            final_kode = roster_map[curr]
             is_roster = True
         elif day_name in regular_map:
-            jk_obj = regular_map[day_name]
+            final_kode = regular_map[day_name]
             is_roster = False
+        elif day_name in dept_map:
+            final_kode = dept_map[day_name]
+            is_roster = False
+        else:
+            final_kode = karyawan.kode_jadwal
+            is_roster = False
+            
+        jk_obj = jk_map.get(final_kode) if final_kode else None
             
         if jk_obj:
             item["kode_jam_kerja"] = jk_obj.kode_jam_kerja
@@ -125,6 +158,7 @@ async def get_jadwal_bulanan(
             # Format time HH:MM:SS
             item["jam_absen_masuk"] = str(p.jam_in) if p.jam_in else None
             item["jam_absen_pulang"] = str(p.jam_out) if p.jam_out else None
+            item["status"] = p.status if p.status else "H"
             
         jadwal_full.append(item)
         curr += timedelta(days=1)
