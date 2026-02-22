@@ -117,13 +117,25 @@ async def trigger_emergency(
         "timestamp": str(datetime.now())
     })
 
-    # Broadcast FCM Push Notification (Antar Cabang / Cross Branch)
+    # Broadcast FCM Push Notification (Hanya untuk cabang yang sama)
     try:
-        devices = db.query(KaryawanDevices).filter(KaryawanDevices.fcm_token != None).all()
-        tokens = list(set([d.fcm_token for d in devices if d.fcm_token]))
+        target_kode_cabang = req.branch_code if req.branch_code else (karyawan.kode_cabang if karyawan else None)
+        tokens = []
+        
+        if target_kode_cabang:
+            target_karyawans = db.query(Karyawan.nik).filter(Karyawan.kode_cabang == target_kode_cabang).all()
+            target_niks = [r.nik for r in target_karyawans if r.nik]
+            
+            if target_niks:
+                devices = db.query(KaryawanDevices).filter(
+                    KaryawanDevices.nik.in_(target_niks),
+                    KaryawanDevices.fcm_token != None
+                ).all()
+                tokens = list(set([d.fcm_token for d in devices if d.fcm_token]))
         
         if tokens:
-            nama_pelapor = karyawan.nama_karyawan if karyawan and karyawan.nama_karyawan else user.username
+            nama_pelapor = karyawan.nama_karyawan if karyawan and hasattr(karyawan, 'nama_karyawan') else user.username
+
             
             msg = messaging.MulticastMessage(
                 data={
