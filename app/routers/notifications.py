@@ -224,6 +224,7 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
     } for d in devices]
 
     # Member Expiring
+    today = date.today()
     next_30_days = today + timedelta(days=30)
     q_expiring = db.query(Karyawan.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, Karyawan.masa_aktif_kartu_anggota)\
                  .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
