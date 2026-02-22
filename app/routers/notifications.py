@@ -136,6 +136,12 @@ def get_notification_summary(db: Session = Depends(get_db)):
 
     return {
         "ajuan_absen": total_ajuan_absen,
+        "detail_izin": {
+            "absen": notifikasi_izinabsen,
+            "sakit": notifikasi_izinsakit,
+            "cuti": notifikasi_izincuti,
+            "dinas": notifikasi_izindinas
+        },
         "lembur": notifikasi_lembur,
         "device_lock": device_lock_count,
         "member_expiring": expiring_count,

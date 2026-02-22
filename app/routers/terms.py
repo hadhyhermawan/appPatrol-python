@@ -5,8 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 from app.database import get_db
 from app.models.terms import TermsAndConditions
-from app.services.auth_service import get_current_user
-from app.models.models import Karyawan
+from app.core.permissions import get_current_user, CurrentUser
 
 router = APIRouter(
     prefix="/terms",
@@ -40,7 +39,7 @@ class TermsResponse(TermsBase):
 @router.get("/active", response_model=TermsResponse)
 def get_active_terms(
     db: Session = Depends(get_db),
-    current_user: Karyawan = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     terms = db.query(TermsAndConditions).filter(TermsAndConditions.is_active == True).order_by(TermsAndConditions.updated_at.desc()).first()
     if not terms:
@@ -51,7 +50,7 @@ def get_active_terms(
 @router.get("/", response_model=List[TermsResponse])
 def get_all_terms(
     db: Session = Depends(get_db),
-    current_user: Karyawan = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     # Only allow superadmin or specific roles if needed, simplified for now
     return db.query(TermsAndConditions).order_by(TermsAndConditions.created_at.desc()).all()
@@ -61,7 +60,7 @@ def get_all_terms(
 def create_terms(
     terms: TermsCreate,
     db: Session = Depends(get_db),
-    current_user: Karyawan = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     if terms.is_active:
         # Deactivate all other terms
@@ -79,7 +78,7 @@ def update_terms(
     terms_id: int,
     terms_update: TermsUpdate,
     db: Session = Depends(get_db),
-    current_user: Karyawan = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     db_terms = db.query(TermsAndConditions).filter(TermsAndConditions.id == terms_id).first()
     if not db_terms:
@@ -103,7 +102,7 @@ def update_terms(
 def delete_terms(
     terms_id: int,
     db: Session = Depends(get_db),
-    current_user: Karyawan = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     db_terms = db.query(TermsAndConditions).filter(TermsAndConditions.id == terms_id).first()
     if not db_terms:

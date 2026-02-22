@@ -417,7 +417,19 @@ async def patroli_absen(
         ulat, ulon = map(float, loc_patrol.split(','))
         dist = haversine_great_circle_distance(ulat, ulon, clat, clon)
         if dist > cabang.radius_cabang:
-             return {"status": False, "message": "Anda berada di luar radius kantor."}
+            try:
+                from app.models.models import SecurityReports
+                rep = SecurityReports(
+                    nik=nik,
+                    type='OUT_OF_LOCATION',
+                    detail=f"Terdeteksi Absen Patroli di luar jangkauan (Jarak: {int(dist)}m dari Max Radius {int(cabang.radius_cabang)}m)",
+                    status_flag='pending'
+                )
+                db.add(rep)
+                db.commit()
+            except Exception:
+                db.rollback()
+            return {"status": False, "message": "Anda berada di luar radius kantor."}
              
     # Anti double (simple)
     existing = db.query(PatrolSessions).filter(PatrolSessions.nik == nik, PatrolSessions.tanggal == tanggal, PatrolSessions.kode_jam_kerja == presensi.kode_jam_kerja).order_by(PatrolSessions.id.desc()).first()
