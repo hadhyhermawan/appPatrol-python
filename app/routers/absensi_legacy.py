@@ -165,7 +165,7 @@ async def get_presensi_hari_ini(
         # Logic Flags
         "absen_masuk_selesai": True if (presensi and presensi.jam_in) or (presensi and presensi.status and presensi.status.lower() != 'h' and presensi.status.lower() != 'a') else False,
         "absen_pulang_selesai": True if (presensi and presensi.jam_out) or (presensi and presensi.status and presensi.status.lower() != 'h' and presensi.status.lower() != 'a') else False,
-        "tombol_enabled": True, # Logic handled by app usually, but we enable by default
+        "tombol_enabled": True if not (str(karyawan.lock_jam_kerja) == '1' and not jam_kerja_obj and not presensi) else False,
         "lock_location": True if str(karyawan.lock_location) == '1' else False,
         "lock_jam_kerja": True if str(karyawan.lock_jam_kerja) == '1' else False,
         "face_recognition": face_recognition
@@ -261,7 +261,11 @@ async def absen(
                  jk = jam_kerja_obj
                  used_kode_jam_kerja = jk.kode_jam_kerja
              else:
-                 # Jika benar-benar tidak ada jadwal sama sekali, fallback ke entry pertama
+                 karyawan_check = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+                 if karyawan_check and str(karyawan_check.lock_jam_kerja) == '1':
+                     raise HTTPException(400, "Anda tidak memiliki jadwal kerja hari ini dan status jadwal Anda Terkunci. Silakan hubungi Admin.")
+                     
+                 # Jika tidak di-lock, fallback ke entry shift pertama sebagai default
                  jk = db.query(PresensiJamkerja).first()
                  if not jk:
                       raise HTTPException(500, "Master Jam Kerja kosong.")
