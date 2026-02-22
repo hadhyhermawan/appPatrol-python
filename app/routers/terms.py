@@ -6,6 +6,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models.terms import TermsAndConditions
 from app.core.permissions import get_current_user, CurrentUser
+from app.routers.auth_legacy import get_current_user_sanctum
 
 router = APIRouter(
     prefix="/api/terms",
@@ -40,12 +41,22 @@ class TermsResponse(TermsBase):
     class Config:
         from_attributes = True
 
-# GET active terms for mobile app (requires authentication)
+# GET active terms for WEB (requires web authentication)
 @router.get("/active", response_model=TermsResponse)
-@router_android.get("/active", response_model=TermsResponse)
 def get_active_terms(
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(get_current_user)
+):
+    terms = db.query(TermsAndConditions).filter(TermsAndConditions.is_active == True).order_by(TermsAndConditions.updated_at.desc()).first()
+    if not terms:
+        raise HTTPException(status_code=404, detail="No active terms and conditions found")
+    return terms
+
+# GET active terms for ANDROID (requires legacy/sanctum authentication)
+@router_android.get("/active", response_model=TermsResponse)
+def get_active_terms_android(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user_sanctum)
 ):
     terms = db.query(TermsAndConditions).filter(TermsAndConditions.is_active == True).order_by(TermsAndConditions.updated_at.desc()).first()
     if not terms:
