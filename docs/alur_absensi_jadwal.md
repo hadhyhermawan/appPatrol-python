@@ -84,14 +84,26 @@ Oleh karena itu di `absensi_legacy.py` kita menggunakan injeksi **Shift Tolerenc
 - **Logika:** Jika waktu menekan Check-In adalah *Malem* (`>= 20:00:00`) dan si karyawan hari ini tidak mempunyai shift gantung, maka sistem akan **meneropong ke tanggal Esok Harinya** (Tanggal B).
 - Bila di Tanggal B dia punya Shift yang masuknya jam `<= 06:00` Pagi (Contoh `00:00:00` itu masuk kategori ini), maka sistem akan menaruh Presensi absen tersebut otomatis sebagai kehadiran miliknya di Shift **Tanggal B**. Absensinya berhasil masuk mulus tanpa galat.
 
-## 4. Proses Rekam Bukti (_Penyimpanan File_)
+## 4. Validasi Batas Waktu Absen (Time Bounds Enforcement)
+Fitur `batasan_waktu` beroperasi berdasarkan kombinasi pengaturan global `batasi_absen` di tabel `pengaturan_umum` dan flag `lock_jam_kerja` pada profil `karyawan`. Jika keduanya aktif (`1`), sistem akan memaksakan batas waktu yang ketat (`Strict Time Enforcement`):
+
+1. **Batas Absen Masuk (`Masuk`)**:
+   - **Batas Awal**: Karyawan **tidak diizinkan absen lebih awal dari 3 Jam** sebelum waktu `jam_masuk` yang ditentukan. Tindakan ini akan ditolak dengan galat: *"Belum waktunya absen masuk."*
+   - **Batas Akhir**: Karyawan **tidak diizinkan absen jika terlambat melebihi batas waktu toleransi** (`jam_masuk` + `batas_jam_absen` dari `pengaturan_umum`). Keterlambatan melebihi batas ini ditolak dengan pesan: *"Batas waktu absen masuk berakhir."*
+   
+2. **Batas Absen Pulang (`Pulang`)**:
+   - **Batas Awal**: Karyawan **TIDAK BOLEH memanipulasi kepulangan lebih cepat**. Absen pulang secara paksa *sebelum* tiba waktunya (`jam_pulang` Shift) dilarang mutlak oleh API: *"Belum waktunya absen pulang. Anda baru bisa pulang pukul [HH:MM] atau setelahnya."*
+   - **Batas Akhir**: Sama dengan toleransi masuk, sistem akan membatasi waktu kedaluwarsa kepulangan pada (`jam_pulang` + nilai toleransi `batas_jam_absen_pulang`). Segala _request_ di luar batas ini akan menghasilkan pesan galat batas *Error 403*.
+   - Evaluasi ini sudah otomatis mengompensasi jadwal *lintas hari* (shift malam), di mana sistem akan sadar untuk menghitung rentang akhir pada rentang tanggal esok hari. Jika fitur sinkronisasi *lock_jam_kerja* gagal atau datanya error (NameError), Endpoint didesain untuk gagal secara *fail-safe* dan memunculkan *Internal Server Error*.
+
+## 5. Proses Rekam Bukti (_Penyimpanan File_)
 Semua tangkapan foto Wajah (`in/out`) dari Android/Kamera akan dikirim dan disimpan Backend Python dan dilempar isinya menuju direktori penyimpanan yang digandeng paralel dengan sistem Website Admin (_dulu Laravel, kini disatukan storage-nya_):
 **Lokasi Direktori Fisik:** `/var/www/appPatrol/storage/app/public/uploads/absensi`
 **Format Nama File:** `{NIK}-{TANGGAL_SEKARANG}-{in/out}.png`
 
 Kemudian rincian jalannya (_Path_) ini disuntik ke tabel Transaksi `presensi` di kolom `foto_in` maupun `foto_out`.
 
-## 5. Tata Kelola Data Perizinan (Sakit, Cuti, Izin, Dinas)
+## 6. Tata Kelola Data Perizinan (Sakit, Cuti, Izin, Dinas)
 Karyawan yang berhalangan hadir memiliki alur data khusus yang diproses melalui _Approval_ (Persetujuan) oleh pimpinan di Website Admin. Sistem menanganinya dengan dua layer pencatatan:
 
 1. **Tabel Pengajuan Spesifik**: Saat Karyawan mengajukan Izin/Cuti, sistem menampungnya di tabel formulir seperti `presensi_izinabsen`, `presensi_izincuti`, `presensi_izindinas`, atau `presensi_izinsakit`. Semua tabel ini memiliki kolom rentang _dari_ hingga _sampai_ serta kolom status persetujuan (`status` bernilai `1` jika **Disetujui**).
@@ -105,14 +117,14 @@ Karyawan yang berhalangan hadir memiliki alur data khusus yang diproses melalui 
 - Komponen API akan membaca kode abjad tersebut dari tabel `presensi` milik hari itu dan mengembalikan indikator status `I` / `S` / `C` / `D` (Bukan sekadar `H` Hadir atau `A` Alpa) ke layar HP/Dashboard karyawan.
 - Aplikasi Android dan API `absen` telah diprogram untuk memblokir secara paksa apabila ada Karyawan yang iseng menekan layar "Check-In" saat data mereka di server sudah dilabeli berhalangan hadir (*_Throw Error Alert: "Anda tidak dapat absen, status hari ini: IZIN/SAKIT"_*).  
 
-## 6. Auto-Close (Fitur Lupa Absen Pulang)
+## 7. Auto-Close (Fitur Lupa Absen Pulang)
 Jika karyawan telah absen masuk dan bekerja namun **lupa untuk menekan tombol Absen Pulang** hingga melewati `(jam pulang + batas_jam_absen_pulang)`:
 1. Sistem rutinitas *APScheduler* API Python (`auto_close_presensi.py`) akan mendeteksi baris tersebut sebagai kadaluwarsa.
 2. Status presensi baris tersebut akan dikunci mati dan ditimpa paksa menjadi `status = 'ta'` (Tidak Absen/Ditutup Otomatis).
 3. Untuk mencegah rancu lembur pada laporan Payroll sistem, kolom `jam_out` tidak akan diisi waktu pemrosesan Auto-Close, melainkan **dibiarkan kosong (`NULL`)**. 
 4. Saat halaman Web Admin maupun HP mendeteksi kehadiran status `'ta'`, UI tidak akan meminta absen pulang (berkedip merah) melainkan menampilkan label **"— (Ditutup Otomatis)"**.
 
-## 7. Penanganan Jadwal Patroli Lintas Hari (Cross-Midnight)
+## 8. Penanganan Jadwal Patroli Lintas Hari (Cross-Midnight)
 Pada fitur Jadwal Patroli, ada skenario di mana sebuah shift melintasi tengah malam (contoh: Shift Sore II `16:00 - 08:00`), dan di dalam shift tersebut terdapat tugas patroli yang dijadwalkan pada dini hari (contoh: `01:00`).
 
 Sistem menangani ini dengan dua lapis penyesuaian:
