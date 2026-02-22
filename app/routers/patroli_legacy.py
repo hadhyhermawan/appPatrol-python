@@ -171,12 +171,12 @@ async def get_absen_patrol(
     ).all()
 
     schedules = db.query(PatrolSchedules).filter(
-        PatrolSchedules.kode_jam_kerja == jam_kerja.kode_jam_kerja,
+        or_(PatrolSchedules.kode_jam_kerja == jam_kerja.kode_jam_kerja, PatrolSchedules.kode_jam_kerja == None, PatrolSchedules.kode_jam_kerja == ''),
         PatrolSchedules.is_active == True
     ).filter(
-        or_(PatrolSchedules.kode_dept == None, PatrolSchedules.kode_dept == karyawan.kode_dept)
+        or_(PatrolSchedules.kode_dept == None, PatrolSchedules.kode_dept == '', PatrolSchedules.kode_dept == karyawan.kode_dept)
     ).filter( # Explicit filter logic to match Laravel
-        or_(PatrolSchedules.kode_cabang == None, PatrolSchedules.kode_cabang == karyawan.kode_cabang)
+        or_(PatrolSchedules.kode_cabang == None, PatrolSchedules.kode_cabang == '', PatrolSchedules.kode_cabang == karyawan.kode_cabang)
     ).all()
     
     if schedules:
@@ -340,8 +340,8 @@ async def get_absen_patrol(
             "name": sch.name if sch.name else "Tugas Rutin",
             "start_time": str(sch.start_time),
             "end_time": str(sch.end_time),
-            "start_datetime": start_datetime.isoformat(),
-            "end_datetime": end_datetime.isoformat(),
+            "start_datetime": start_datetime.strftime('%Y-%m-%dT%H:%M:%S+07:00'),
+            "end_datetime": end_datetime.strftime('%Y-%m-%dT%H:%M:%S+07:00'),
             "formatted_time": f"{start_datetime.strftime('%H:%M')} - {end_datetime.strftime('%H:%M')}",
             "status": status_task
         }) 
@@ -613,12 +613,12 @@ def _build_schedule_tasks_for_day(
     from sqlalchemy import or_
 
     schedules = db.query(PatrolSchedules).filter(
-        PatrolSchedules.kode_jam_kerja == jam_kerja.kode_jam_kerja,
+        or_(PatrolSchedules.kode_jam_kerja == jam_kerja.kode_jam_kerja, PatrolSchedules.kode_jam_kerja == None, PatrolSchedules.kode_jam_kerja == ''),
         PatrolSchedules.is_active == True
     ).filter(
-        or_(PatrolSchedules.kode_dept == None, PatrolSchedules.kode_dept == karyawan.kode_dept)
+        or_(PatrolSchedules.kode_dept == None, PatrolSchedules.kode_dept == '', PatrolSchedules.kode_dept == karyawan.kode_dept)
     ).filter(
-        or_(PatrolSchedules.kode_cabang == None, PatrolSchedules.kode_cabang == karyawan.kode_cabang)
+        or_(PatrolSchedules.kode_cabang == None, PatrolSchedules.kode_cabang == '', PatrolSchedules.kode_cabang == karyawan.kode_cabang)
     ).all()
 
     tasks = []
@@ -649,11 +649,12 @@ def _build_schedule_tasks_for_day(
 
         date_str = target_date.strftime('%d %b')
         tasks.append({
+            'id': sch.id,
             'name': f"{sch.name or 'Patroli'} ({sch.start_time.strftime('%H:%M')}-{sch.end_time.strftime('%H:%M')})",
             'start_time': str(sch.start_time),
             'end_time': str(sch.end_time),
-            'start_datetime': start_dt.isoformat(),
-            'end_datetime': end_dt.isoformat(),
+            'start_datetime': start_dt.strftime('%Y-%m-%dT%H:%M:%S+07:00'),
+            'end_datetime': end_dt.strftime('%Y-%m-%dT%H:%M:%S+07:00'),
             'formatted_time': f"{date_str}, {sch.start_time.strftime('%H:%M')} - {sch.end_time.strftime('%H:%M')}",
             'status': status,
             'date': str(target_date),

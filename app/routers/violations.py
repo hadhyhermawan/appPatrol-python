@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.models import (
     Violation, Karyawan, Presensi, PresensiJamkerja, Cabang,
     PatrolSchedules, PatrolSessions, DepartmentTaskSessions, Departemen, AppFraud,
-    EmployeeLocationHistories
+    EmployeeLocationHistories, SecurityReports
 )
 from sqlalchemy import func, or_, and_, desc
 import shutil
@@ -476,6 +476,44 @@ def scan_violations(
                 "timestamp": str(f.timestamp),
                 "severity": sev,
                 "violation_code": violation_code
+            })
+
+    # 4b. Security Reports (Force Close, Fake GPS, Face Verify Fail)
+    q_reports = db.query(SecurityReports, Karyawan).join(Karyawan, SecurityReports.nik == Karyawan.nik).filter(func.date(SecurityReports.created_at) == date_scan, SecurityReports.status_flag == 'pending')
+    if excluded_niks:
+        q_reports = q_reports.filter(SecurityReports.nik.notin_(excluded_niks))
+    reports = q_reports.all()
+
+    report_map = {
+        'FAKE_GPS': 'Terdeteksi Fake GPS (FCM)',
+        'APP_FORCE_CLOSE': 'Aplikasi Force Close',
+        'FACE_VERIFICATION_FAILED': 'Gagal Verifikasi Wajah'
+    }
+    
+    code_map = {
+        'FAKE_GPS': 'FAKE_GPS',
+        'APP_FORCE_CLOSE': 'FORCE_CLOSE',
+        'FACE_VERIFICATION_FAILED': 'FACE_VERIFY_FAIL'
+    }
+
+    for r, k in reports:
+        report_type = code_map.get(r.type, r.type)
+        label = report_map.get(r.type, r.type)
+        
+        # Severity
+        sev = 'SEDANG'
+        if r.type in ['FAKE_GPS', 'FACE_VERIFICATION_FAILED']:
+            sev = 'BERAT'
+            
+        if is_new(r.nik, report_type):
+            results.append({
+                "nik": r.nik,
+                "nama_karyawan": k.nama_karyawan,
+                "type": label,
+                "description": r.detail or "Laporan aktivitas tidak wajar dari aplikasi",
+                "timestamp": str(r.created_at),
+                "severity": sev,
+                "violation_code": report_type
             })
 
     # 5. Laravel Mock Location Check (EmployeeLocationHistories.is_mocked = 1)

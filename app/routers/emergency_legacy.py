@@ -5,9 +5,19 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
-from app.models.models import EmergencyAlerts, SecurityReports, Users, Karyawan
+from app.models.models import EmergencyAlerts, SecurityReports, Users, Karyawan, Cabang, KaryawanDevices
 from app.sio import sio as sio_server
 from sqlalchemy import desc
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+# Initialize Firebase if not already initialized
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate("/var/www/appPatrol-python/serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+except Exception as e:
+    pass
 
 router = APIRouter(
     prefix="/api/android",
@@ -202,10 +212,66 @@ async def report_abuse(
     blocked = False
     message = "Laporan diterima"
     
-    # Example logic: if fail_count > 3, return blocked=True (client side handles logout usually)
+    # Trigger escalation criteria
+    needs_escalation = False
+    alert_title = "🚨 PERINGATAN KEAMANAN"
+    alert_body = ""
+
     if fail_count and fail_count > 5:
         blocked = True
+        needs_escalation = True
         message = "Akun terkunci sementara karena aktivitas mencurigakan"
+        alert_body = "Perangkat/Akun Personel {nama} dikunci oleh sistem akibat gagal verifikasi wajah berturut-turut di Area {cabang}."
+
+    elif type == 'APP_FORCE_CLOSE':
+        # Don't block, but notify supervisor
+        blocked = False
+        needs_escalation = True
+        message = "Peringatan: Sistem mendeteksi bahwa aplikasi dipaksa berhenti atau ditutup tidak wajar."
+        alert_title = "⚠️ INDIKASI FORCE CLOSE APLIKASI"
+        alert_body = "Personel {nama} terdeteksi menutup paksa aplikasi K3Guard dari Recent Apps / Pemaksaan Berhenti di Area {cabang}."
+
+    if needs_escalation:
+        # --- ENTERPRISE OPTIMIZATION: ESCALATION PUSH NOTIFICATION ---
+        try:
+            karyawan = db.query(Karyawan).filter(Karyawan.nik == used_nik).first()
+            if karyawan and karyawan.kode_cabang:
+                target_karyawans = db.query(Karyawan.nik).filter(
+                     Karyawan.kode_cabang == karyawan.kode_cabang,
+                     Karyawan.nik != used_nik
+                ).all()
+                target_niks = [r[0] for r in target_karyawans]
+                
+                if target_niks:
+                    devices = db.query(KaryawanDevices).filter(KaryawanDevices.nik.in_(target_niks)).all()
+                    tokens = [d.fcm_token for d in devices if d.fcm_token]
+                    
+                    if tokens:
+                        nama_pelanggar = karyawan.nama_karyawan or used_nik
+                        cabang_info = db.query(Cabang).filter(Cabang.kode_cabang == karyawan.kode_cabang).first()
+                        nama_cabang = cabang_info.nama_cabang if cabang_info else "Cabang"
+
+                        msg = messaging.MulticastMessage(
+                            notification=messaging.Notification(
+                                title=alert_title,
+                                body=alert_body.format(nama=nama_pelanggar, cabang=nama_cabang)
+                            ),
+                            data={
+                                "type": "SECURITY_ALERT",
+                                "subtype": type,
+                                "nik_pelanggar": used_nik,
+                                "nama_pelanggar": nama_pelanggar
+                            },
+                            tokens=tokens[:500], # Max 500 per batch
+                            android=messaging.AndroidConfig(priority='high')
+                        )
+                        
+                        response = messaging.send_each_for_multicast(msg)
+                        print(f"SECURITY ESCALATION SENT. Success: {response.success_count}, Failed: {response.failure_count}")
+
+        except Exception as push_err:
+            print(f"Failed to push escalate security concern: {push_err}")
+        # -------------------------------------------------------------
 
     return {
         "blocked": blocked,

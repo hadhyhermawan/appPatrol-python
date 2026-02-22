@@ -5,7 +5,16 @@ from sqlalchemy import desc
 
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
-from app.models.models import EmployeeLocations, EmployeeLocationHistories, EmployeeStatus, Karyawan
+from app.models.models import EmployeeLocations, EmployeeLocationHistories, EmployeeStatus, Karyawan, Cabang, KaryawanDevices
+
+import firebase_admin
+from firebase_admin import credentials, messaging
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate("/var/www/appPatrol-python/serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+except Exception as e:
+    pass
 
 router = APIRouter(
     prefix="/api/android",
@@ -71,6 +80,79 @@ async def update_location(
     status.is_online = 1 # Assume online if sending location
     
     db.commit()
+
+    # --- ENTERPRISE OPTIMIZATION: REAL-TIME MOCK LOCATION ALERT ---
+    if isMocked == 1:
+        try:
+            # Cegah spam alert: cek apakah dalam 1 jam terakhir sudah pernah dikirim alarm 
+            # Fake GPS untuk NIK ini. Jika sudah, skip agar HP Komandan tidak berisik.
+            from datetime import timedelta
+            satu_jam_lalu = datetime.now() - timedelta(hours=1)
+            
+            # Kita bisa cek dari tabel security_reports 
+            from app.models.models import SecurityReports
+            recent_mock_alert = db.query(SecurityReports).filter(
+                SecurityReports.nik == user.nik,
+                SecurityReports.type == 'FAKE_GPS',
+                SecurityReports.created_at >= satu_jam_lalu
+            ).first()
+            
+            if not recent_mock_alert:
+                karyawan_pelanggar = db.query(Karyawan).filter(Karyawan.nik == user.nik).first()
+                if karyawan_pelanggar and karyawan_pelanggar.kode_cabang:
+                    target_karyawans = db.query(Karyawan.nik).filter(
+                        Karyawan.kode_cabang == karyawan_pelanggar.kode_cabang,
+                        Karyawan.nik != user.nik
+                    ).all()
+                    
+                    target_niks = [r[0] for r in target_karyawans]
+                    if target_niks:
+                        devices = db.query(KaryawanDevices).filter(KaryawanDevices.nik.in_(target_niks)).all()
+                        tokens = [d.fcm_token for d in devices if d.fcm_token]
+                        
+                        if tokens:
+                            nama_pelanggar = karyawan_pelanggar.nama_karyawan or user.nik
+                            cabang_info = db.query(Cabang).filter(Cabang.kode_cabang == karyawan_pelanggar.kode_cabang).first()
+                            nama_cabang = cabang_info.nama_cabang if cabang_info else "Cabang"
+
+                            alert_title = "⚠️ INDIKASI FAKE GPS"
+                            alert_body = f"Personel {nama_pelanggar} terdeteksi menggunakan aplikasi Titik Lokasi Palsu (Fake GPS) di area {nama_cabang}."
+                            
+                            msg = messaging.MulticastMessage(
+                                notification=messaging.Notification(
+                                    title=alert_title,
+                                    body=alert_body
+                                ),
+                                data={
+                                    "type": "SECURITY_ALERT",
+                                    "subtype": "FAKE_GPS",
+                                    "nik_pelanggar": user.nik,
+                                    "nama_pelanggar": nama_pelanggar
+                                },
+                                tokens=tokens[:500],
+                                android=messaging.AndroidConfig(priority='high')
+                            )
+                            messaging.send_each_for_multicast(msg)
+                            print(f"MOCK LOCATION ESCALATION SENT for NIK: {user.nik}")
+
+                # Catat ke security_reports agar dicentang sudah diingatkan
+                report = SecurityReports(
+                    type='FAKE_GPS',
+                    detail=f"Terdeteksi otomatis melalui modul Tracking Android. Coordinate: {latitude},{longitude}",
+                    user_id=user.id,
+                    nik=user.nik,
+                    latitude=latitude,
+                    longitude=longitude,
+                    status_flag='pending',
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+                db.add(report)
+                db.commit()
+
+        except Exception as alert_err:
+            print(f"Failed to push escalate Mock Location concern: {alert_err}")
+    # ----------------------------------------------------------------
     
     return {"status": True, "message": "Location Updated"}
 

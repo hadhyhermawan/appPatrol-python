@@ -326,3 +326,85 @@ async def absen(
         "message": message,
         # Return filename or full url if needed by Android immediately? Usually just success message.
     }
+
+@router.post("/request-bypass-radius")
+async def request_bypass_radius(
+    lokasi: str = Form(None),
+    keterangan: str = Form(None),
+    nik: str = Depends(get_current_user_nik),
+    db: Session = Depends(get_db)
+):
+    from app.models.models import SecurityReports, Karyawan, KaryawanDevices, Cabang
+    from firebase_admin import messaging
+    
+    # 1. Pastikan belum ada request pending
+    existing = db.query(SecurityReports).filter(
+        SecurityReports.nik == nik,
+        SecurityReports.type == 'RADIUS_BYPASS',
+        SecurityReports.status_flag == 'pending'
+    ).first()
+    
+    if existing:
+        return {"status": False, "message": "Anda sudah mengajukan izin yang saat ini sedang menunggu persetujuan."}
+        
+    latitude = None
+    longitude = None
+    if lokasi and ',' in lokasi:
+        try:
+            latitude = float(lokasi.split(',')[0].strip())
+            longitude = float(lokasi.split(',')[1].strip())
+        except:
+            pass
+
+    report = SecurityReports(
+        type='RADIUS_BYPASS',
+        detail=f"Meminta izin absen luar tapak. Alasan: {keterangan or 'GPS tidak akurat'}.",
+        nik=nik,
+        latitude=latitude,
+        longitude=longitude,
+        status_flag='pending',
+        created_at=datetime.now(),
+        updated_at=datetime.now()
+    )
+    db.add(report)
+    db.commit()
+    
+    # 2. Eskalasi ke Danru/Admin
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+    if karyawan and karyawan.kode_cabang:
+        # Kirim notif ke seluruh Danru/Admin di Cabang tersebut
+        target_karyawans = db.query(Karyawan.nik).filter(
+             Karyawan.kode_cabang == karyawan.kode_cabang,
+             Karyawan.nik != nik
+        ).all()
+        target_niks = [r[0] for r in target_karyawans]
+        
+        if target_niks:
+            devices = db.query(KaryawanDevices).filter(KaryawanDevices.nik.in_(target_niks)).all()
+            tokens = [d.fcm_token for d in devices if d.fcm_token]
+            
+            if tokens:
+                try:
+                    nama_pemohon = karyawan.nama_karyawan or nik
+                    cabang_info = db.query(Cabang).filter(Cabang.kode_cabang == karyawan.kode_cabang).first()
+                    nama_cabang = cabang_info.nama_cabang if cabang_info else "Cabang"
+
+                    msg = messaging.MulticastMessage(
+                        notification=messaging.Notification(
+                            title="Izin Absen Luar Tapak",
+                            body=f"Personel {nama_pemohon} meminta bypass radius absen di Area {nama_cabang}."
+                        ),
+                        data={
+                            "type": "SECURITY_ALERT_BYPASS",
+                            "subtype": "RADIUS_BYPASS",
+                            "nik_pemohon": nik,
+                            "nama_pemohon": nama_pemohon 
+                        },
+                        tokens=tokens[:500],
+                        android=messaging.AndroidConfig(priority='high')
+                    )
+                    messaging.send_each_for_multicast(msg)
+                except Exception as e:
+                    pass
+
+    return {"status": True, "message": "Izin absen luar tapak berhasil diajukan. Silakan tunggu persetujuan Atasan."}

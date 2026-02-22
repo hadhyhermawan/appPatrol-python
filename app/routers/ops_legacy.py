@@ -164,10 +164,10 @@ async def store_turlalin_masuk(
     with open(path, "wb") as buffer:
         shutil.copyfileobj(foto.file, buffer)
         
-    if jam_masuk:
-        jam_masuk_wib = jam_masuk
-    else:
-        jam_masuk_wib = datetime.now(WIB).replace(tzinfo=None)
+    # Force use server timestamp (Enterprise Optimization Step 3.1)
+    # Merely logging client's time, but overriding it
+    client_jam_masuk = jam_masuk
+    jam_masuk_wib = datetime.now(WIB).replace(tzinfo=None)
         
     new_data = Turlalin(
         nik=user.nik,
@@ -229,10 +229,9 @@ async def store_turlalin_keluar(
             shutil.copyfileobj(foto_keluar.file, buffer)
         data.foto_keluar = f"turlalin/{filename}"
         
-    if jam_keluar:
-        jam_keluar_wib = jam_keluar
-    else:
-        jam_keluar_wib = datetime.now(WIB).replace(tzinfo=None)
+    # Force use server timestamp (Enterprise Optimization Step 3.1)
+    client_jam_keluar = jam_keluar
+    jam_keluar_wib = datetime.now(WIB).replace(tzinfo=None)
         
     data.jam_keluar = jam_keluar_wib
     data.nik_keluar = user.nik

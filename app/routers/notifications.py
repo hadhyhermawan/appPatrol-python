@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.models import (
     Karyawan, Presensi, Cabang, EmployeeLocations,
     PresensiIzinabsen, PresensiIzinsakit, PresensiIzincuti, PresensiIzindinas, Lembur,
-    KaryawanDevices, WalkieRtcMessages
+    KaryawanDevices, WalkieRtcMessages, SecurityReports
 )
 from app.core.permissions import get_current_user
 # from app.core.permissions import CurrentUser # Legacy uses different CurrentUser model
@@ -144,6 +144,30 @@ def get_notification_summary(db: Session = Depends(get_db)):
         except:
             continue
 
+    # 6. Force Close Reports
+    q_force_close = db.query(SecurityReports).filter(SecurityReports.type == 'APP_FORCE_CLOSE', SecurityReports.status_flag == 'pending')
+    if excluded_niks:
+        q_force_close = q_force_close.filter(SecurityReports.nik.notin_(excluded_niks))
+    force_close_count = q_force_close.count()
+
+    # 7. Face Verify Fails
+    q_face_fail = db.query(SecurityReports).filter(SecurityReports.type == 'FACE_VERIFICATION_FAILED', SecurityReports.status_flag == 'pending')
+    if excluded_niks:
+        q_face_fail = q_face_fail.filter(SecurityReports.nik.notin_(excluded_niks))
+    face_fail_count = q_face_fail.count()
+
+    # 8. Fake GPS (from SecurityReports)
+    q_fake_gps = db.query(SecurityReports).filter(SecurityReports.type == 'FAKE_GPS', SecurityReports.status_flag == 'pending')
+    if excluded_niks:
+        q_fake_gps = q_fake_gps.filter(SecurityReports.nik.notin_(excluded_niks))
+    fake_gps_count = q_fake_gps.count()
+
+    # 9. Radius Bypass Requests
+    q_bypass = db.query(SecurityReports).filter(SecurityReports.type == 'RADIUS_BYPASS', SecurityReports.status_flag == 'pending')
+    if excluded_niks:
+        q_bypass = q_bypass.filter(SecurityReports.nik.notin_(excluded_niks))
+    bypass_count = q_bypass.count()
+
     return {
         "ajuan_absen": total_ajuan_absen,
         "lembur": notifikasi_lembur,
@@ -151,7 +175,11 @@ def get_notification_summary(db: Session = Depends(get_db)):
         "member_expiring": expiring_count,
         "mock_location": mock_count,
         "radius_violation": radius_violation_count,
-        "total_security_alerts": device_lock_count + mock_count + radius_violation_count,
+        "force_close": force_close_count,
+        "face_verify_fail": face_fail_count,
+        "fake_gps_alert": fake_gps_count,
+        "radius_bypass_request": bypass_count,
+        "total_security_alerts": device_lock_count + mock_count + radius_violation_count + force_close_count + face_fail_count + fake_gps_count + bypass_count,
         "total_approval_pending": total_ajuan_absen + notifikasi_lembur
     }
 
@@ -272,12 +300,127 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
         "time": datetime.combine(e.masa_aktif_kartu_anggota, datetime.min.time()) if e.masa_aktif_kartu_anggota else None
     } for e in expiring]
 
+    # Force Closes
+    q_fc = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.created_at)\
+             .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
+             .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+             .filter(SecurityReports.type == 'APP_FORCE_CLOSE', SecurityReports.status_flag == 'pending')\
+             .order_by(SecurityReports.created_at.desc())
+    if excluded_niks:
+        q_fc = q_fc.filter(SecurityReports.nik.notin_(excluded_niks))
+    force_closes = q_fc.limit(5).all()
+    fc_data = [{
+        "id": f.id,
+        "nik": f.nik,
+        "nama": f.nama_karyawan,
+        "cabang": f.nama_cabang,
+        "type": "APP_FORCE_CLOSE",
+        "time": f.created_at
+    } for f in force_closes]
+
+    # Face Verify Fails
+    q_fv = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.created_at)\
+             .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
+             .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+             .filter(SecurityReports.type == 'FACE_VERIFICATION_FAILED', SecurityReports.status_flag == 'pending')\
+             .order_by(SecurityReports.created_at.desc())
+    if excluded_niks:
+        q_fv = q_fv.filter(SecurityReports.nik.notin_(excluded_niks))
+    face_fails = q_fv.limit(5).all()
+    fv_data = [{
+        "id": f.id,
+        "nik": f.nik,
+        "nama": f.nama_karyawan,
+        "cabang": f.nama_cabang,
+        "type": "FACE_VERIFY_FAIL",
+        "time": f.created_at
+    } for f in face_fails]
+
+    # Fake GPS Alerts (Detailed)
+    q_fg = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.created_at)\
+             .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
+             .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+             .filter(SecurityReports.type == 'FAKE_GPS', SecurityReports.status_flag == 'pending')\
+             .order_by(SecurityReports.created_at.desc())
+    if excluded_niks:
+        q_fg = q_fg.filter(SecurityReports.nik.notin_(excluded_niks))
+    fake_gps_alerts_raw = q_fg.limit(5).all()
+    fg_data = [{
+        "id": f.id,
+        "nik": f.nik,
+        "nama": f.nama_karyawan,
+        "cabang": f.nama_cabang,
+        "type": "FAKE_GPS_ALERT",
+        "time": f.created_at
+    } for f in fake_gps_alerts_raw]
+
+    # Radius Bypass Requests
+    q_rb = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.detail, SecurityReports.created_at)\
+             .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
+             .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
+             .filter(SecurityReports.type == 'RADIUS_BYPASS', SecurityReports.status_flag == 'pending')\
+             .order_by(SecurityReports.created_at.desc())
+    if excluded_niks:
+        q_rb = q_rb.filter(SecurityReports.nik.notin_(excluded_niks))
+    bypass_requests_raw = q_rb.limit(10).all()
+    rb_data = [{
+        "id": r.id,
+        "nik": r.nik,
+        "nama": r.nama_karyawan,
+        "cabang": r.nama_cabang,
+        "detail": r.detail,
+        "type": "RADIUS_BYPASS",
+        "time": r.created_at
+    } for r in bypass_requests_raw]
+
     return {
         "mock_locations": mock_data,
         "radius_violations": radius_data,
         "device_locks": device_data,
-        "member_expiring": expiring_data
+        "member_expiring": expiring_data,
+        "force_closes": fc_data,
+        "face_verify_fails": fv_data,
+        "fake_gps_alerts": fg_data,
+        "radius_bypass_requests": rb_data
     }
+
+class MarkReadRequest(BaseModel):
+    id: int
+
+@router.post("/security/notifications/mark-read")
+def mark_security_alert_read(
+    payload: MarkReadRequest,
+    db: Session = Depends(get_db)
+):
+    report = db.query(SecurityReports).filter(SecurityReports.id == payload.id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Alert not found")
+        
+    report.status_flag = 'read'
+    db.commit()
+    return {"status": True, "message": "Alert marked as read"}
+
+class ApproveBypassRequest(BaseModel):
+    id: int
+
+@router.post("/security/notifications/approve-bypass")
+def approve_radius_bypass(
+    payload: ApproveBypassRequest,
+    db: Session = Depends(get_db)
+):
+    report = db.query(SecurityReports).filter(SecurityReports.id == payload.id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Alert not found")
+        
+    report.status_flag = 'approved'
+    
+    # Update Lock Location untuk mengizinkan bypass
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == report.nik).first()
+    if karyawan:
+        karyawan.lock_location = '0'
+        
+    db.commit()
+    return {"status": True, "message": "Izin luar tapak disetujui (1 hari sesi absen)"}
 
 # ==============================================================================
 # NEW NOTIFICATION LOGIC (Video Call, FCM Token)

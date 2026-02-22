@@ -95,4 +95,11 @@ Karyawan yang berhalangan hadir memiliki alur data khusus yang diproses melalui 
 - Komponen API akan membaca kode abjad tersebut dari tabel `presensi` milik hari itu dan mengembalikan indikator status `I` / `S` / `C` / `D` (Bukan sekadar `H` Hadir atau `A` Alpa) ke layar HP/Dashboard karyawan.
 - Aplikasi Android dan API `absen` telah diprogram untuk memblokir secara paksa apabila ada Karyawan yang iseng menekan layar "Check-In" saat data mereka di server sudah dilabeli berhalangan hadir (*_Throw Error Alert: "Anda tidak dapat absen, status hari ini: IZIN/SAKIT"_*).  
 
-`(Dokumentasi dihasilkan dan ditulis otomatis oleh Asisten Antigravity pada 21/02/2026)`
+## 6. Auto-Close (Fitur Lupa Absen Pulang)
+Jika karyawan telah absen masuk dan bekerja namun **lupa untuk menekan tombol Absen Pulang** hingga melewati `(jam pulang + batas_jam_absen_pulang)`:
+1. Sistem rutinitas *APScheduler* API Python (`auto_close_presensi.py`) akan mendeteksi baris tersebut sebagai kadaluwarsa.
+2. Status presensi baris tersebut akan dikunci mati dan ditimpa paksa menjadi `status = 'ta'` (Tidak Absen/Ditutup Otomatis).
+3. Untuk mencegah rancu lembur pada laporan Payroll sistem, kolom `jam_out` tidak akan diisi waktu pemrosesan Auto-Close, melainkan **dibiarkan kosong (`NULL`)**. 
+4. Saat halaman Web Admin maupun HP mendeteksi kehadiran status `'ta'`, UI tidak akan meminta absen pulang (berkedip merah) melainkan menampilkan label **"— (Ditutup Otomatis)"**.
+
+`(Dokumentasi dihasilkan dan diperbarui otomatis oleh Asisten Antigravity pada 22/02/2026)`

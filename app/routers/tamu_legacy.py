@@ -339,6 +339,11 @@ async def store_tamu(
             "message": shift_check["message"]
         })
 
+    logger.info(f"[DEBUG TAMU] nama={nama}, telp={no_telp}, bertemu={bertemu_dengan}, jenis_id={jenis_id}")
+    with open("/tmp/tamu_test_debug.log", "a") as f:
+        f.write(f"RECEIVED: nama={nama} no_telp='{no_telp}' bertemu_dengan='{bertemu_dengan}' jenis_id='{jenis_id}'\\n")
+
+
 
     if no_pol and no_pol.strip() == "":
         no_pol = None
@@ -349,11 +354,9 @@ async def store_tamu(
         foto_path = save_compressed_image(foto, "tamu_masuk")
         
     # 3. Save DB — gunakan raw SQL agar jam_masuk tersimpan dalam WIB (bukan UTC)
-    # Prioritas: jam_masuk dari Android device (sudah WIB), fallback ke now_wib()
-    if jam_masuk:
-        jam_masuk_wib = jam_masuk  # dari Android device, sudah WIB
-    else:
-        jam_masuk_wib = now_wib().strftime('%Y-%m-%d %H:%M:%S')  # fallback
+    # Enterprise Optimization Step 3.1: Force Server Time instead of Android Time
+    client_jam_masuk = jam_masuk
+    jam_masuk_wib = now_wib().strftime('%Y-%m-%d %H:%M:%S')
     logger.info(f"[StoreTamu] jam_masuk yang dipakai: {jam_masuk_wib} (sumber: {'android' if jam_masuk else 'server'})")
 
     from sqlalchemy import text as sql_text
@@ -393,7 +396,7 @@ async def store_tamu(
     
     return {
         "status": True, 
-        "message": "Tamu Berhasil Dicatat", 
+        "message": "Tamu Berhasil Disimpan", 
         "data": new_tamu
     }
 
@@ -430,11 +433,10 @@ async def tamu_pulang(
     # 3. Handle Image
     foto_keluar_path = save_compressed_image(foto_keluar, "tamu_keluar")
 
-    # 4. Tentukan jam_keluar — prioritas dari Android (sudah WIB), fallback server
-    if jam_keluar:
-        jam_keluar_wib = jam_keluar
-    else:
-        jam_keluar_wib = now_wib().strftime('%Y-%m-%d %H:%M:%S')
+    # 4. Tentukan jam_keluar 
+    # Enterprise Optimization Step 3.1: Force Server Time instead of Android Time
+    client_jam_keluar = jam_keluar
+    jam_keluar_wib = now_wib().strftime('%Y-%m-%d %H:%M:%S')
 
     logger.info(f"[TamuPulang] id={id_tamu} jam_keluar={jam_keluar_wib} (sumber: {'android' if jam_keluar else 'server'})")
 
