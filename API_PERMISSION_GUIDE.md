@@ -146,6 +146,31 @@ async def create_jabatan(
 - Use `require_permission_dependency("resource.action")`
 - Keep existing parameters unchanged
 
+### **⚠️ CRITICAL: Web vs Android Authentication Separation**
+
+It is extremely important to **never mix Web route dependencies with Android route dependencies**. Standard Karyawan field workers are **BLOCKED** from the Web Dashboard (which uses `app.core.permissions.get_current_user`), but are allowed unrestricted access via the Retrofit Android Mobile application (which MUST use `app.routers.auth_legacy.get_current_user_sanctum`).
+
+If you use `app.core.permissions.get_current_user` in an endpoint that is accessed by the Android App, the mobile user will instantly suffer a **Force Logout** because the Web Auth logic detects an unauthorized `Karyawan` trying to access something using Web privileges.
+
+#### **Rule of Thumb:**
+- **WEB Endpoint (`router = APIRouter(prefix="/api/something")`)**:
+  ```python
+  from app.core.permissions import get_current_user, CurrentUser
+
+  @router.get("/something")
+  def web_api(current_user: CurrentUser = Depends(get_current_user)):
+       pass
+  ```
+- **ANDROID Endpoint (`router_android = APIRouter(prefix="/api/android/something")`)**:
+  ```python
+  from app.routers.auth_legacy import get_current_user_sanctum
+
+  @router_android.get("/something")
+  def android_api(current_user = Depends(get_current_user_sanctum)):
+       pass
+  ```
+If an API must serve both, instantiate TWO separate routers with TWO separate endpoints wrapping the same core logic.
+
 ---
 
 ## 📋 Endpoints to Protect (Priority List)
