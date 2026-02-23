@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text, select
 from pydantic import BaseModel, Field
@@ -166,6 +166,7 @@ from fastapi import Form
 
 @router.post("/login", response_model=AndroidLoginResponse)
 async def login_android(
+    request: Request,
     username: str = Form(...), 
     password: str = Form(...),
     device_model: Optional[str] = Form(None),
@@ -245,16 +246,25 @@ async def login_android(
 
     # 5. Log Login
     try:
+        real_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "127.0.0.1")
+        if real_ip:
+            real_ip = real_ip.split(",")[0].strip()
+
+        actual_android_version = login_data.android_version or x_app_version or request.headers.get("x-app-version")
+
         log = LoginLogs(
             user_id=user.id,
-            ip="127.0.0.1", # TODO: Real IP
+            ip=real_ip[:45], # ensure ip is max 45 chars
             device=login_data.device_model or "Unknown",
-            android_version=login_data.android_version,
-            login_at=datetime.datetime.utcnow()
+            android_version=actual_android_version,
+            login_at=datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         )
         db.add(log)
         db.commit()
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR: {e}")
         pass # Jangan gagalkan login cuma gara-gara log error
 
     # 6. Generate Token
@@ -349,13 +359,22 @@ def get_current_user_nik(authorization: Optional[str] = Header(None), db: Sessio
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
         
+        user = db.query(Users).filter(Users.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        # Invalidate old tokens if user was reset
+        if "iat" in payload and user.updated_at:
+            token_dt = datetime.datetime.fromtimestamp(payload["iat"])
+            if token_dt < (user.updated_at - datetime.timedelta(seconds=2)):
+                raise HTTPException(status_code=401, detail="Token Invalid/Expired")
+
         # Cari NIK
         pivot = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user_id}).fetchone()
         if pivot:
             return pivot[0]
             
         # Fallback Username
-        user = db.query(Users).filter(Users.id == user_id).first()
         if user:
              k = db.query(Karyawan).filter(Karyawan.nik == user.username).first()
              if k:
@@ -376,17 +395,25 @@ def get_current_user_data(authorization: Optional[str] = Header(None), db: Sessi
         user_id = payload.get("sub")
         username = payload.get("username")
         
+        user = db.query(Users).filter(Users.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        # Invalidate old tokens if user was reset
+        if "iat" in payload and user.updated_at:
+            token_dt = datetime.datetime.fromtimestamp(payload["iat"])
+            if token_dt < (user.updated_at - datetime.timedelta(seconds=2)):
+                raise HTTPException(status_code=401, detail="Token Invalid/Expired")
+
         # Cari NIK
         pivot = db.execute(text("SELECT nik FROM users_karyawan WHERE id_user = :uid"), {"uid": user_id}).fetchone()
         nik = pivot[0] if pivot else None
             
         if not nik:
             # Fallback Username
-            user = db.query(Users).filter(Users.id == user_id).first()
-            if user:
-                 k = db.query(Karyawan).filter(Karyawan.nik == user.username).first()
-                 if k:
-                     nik = k.nik
+            k = db.query(Karyawan).filter(Karyawan.nik == user.username).first()
+            if k:
+                nik = k.nik
         
         # Jika NIK tetap None, mungkin admin/non-karyawan. Tetap return user data.
         return CurrentUser(id=int(user_id), username=username, nik=nik)
@@ -409,6 +436,12 @@ async def validate_user_token_endpoint(token: str, db: Session = Depends(get_db)
         user = db.query(Users).filter(Users.id == user_id).first()
         if not user:
              return {"status": False, "message": "User not found"}
+
+        # Invalidate old tokens if user was reset
+        if "iat" in payload and user.updated_at:
+            token_dt = datetime.datetime.fromtimestamp(payload["iat"])
+            if token_dt < (user.updated_at - datetime.timedelta(seconds=2)):
+                 return {"status": False, "message": "Token Invalid/Expired (Session Reset)"}
 
         # Cari Data Karyawan (NIK & Nama)
         nik = None

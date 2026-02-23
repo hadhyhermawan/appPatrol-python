@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Form
+from fastapi import APIRouter, Depends, HTTPException, Body, Form, Request
 from pydantic import BaseModel
 from typing import Optional, Any
 from datetime import datetime
@@ -215,6 +215,7 @@ async def get_emergency_logs(
 
 @router.post("/security/report-abuse")
 async def report_abuse(
+    request: Request,
     type: str = Form(...),
     detail: str = Form(""),
     lokasi: str = Form(None),
@@ -229,6 +230,9 @@ async def report_abuse(
 ):
     used_nik = user.nik if user.nik else nik
     
+    ip_address = request.headers.get("x-forwarded-for", request.client.host if request.client else "127.0.0.1")
+    user_agent = request.headers.get("user-agent", "")
+    
     report = SecurityReports(
         type=type,
         detail=detail,
@@ -239,6 +243,8 @@ async def report_abuse(
         device_model=device_model,
         device_id=device_id,
         fail_count=fail_count,
+        ip_address=ip_address,
+        user_agent=user_agent,
         status_flag='pending',
         created_at=datetime.now(),
         updated_at=datetime.now()

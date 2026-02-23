@@ -101,6 +101,7 @@ async def get_monitoring_regu(
     tanggal: Optional[date] = Query(None),
     kode_cabang: Optional[str] = Query(None),
     kode_dept: Optional[str] = Query(None),
+    kode_jam_kerja: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     # print(f"DEBUG: Processing monitoring regu for {tanggal}")
@@ -201,6 +202,9 @@ async def get_monitoring_regu(
     jk_infos = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja.in_(assign_codes)).all()
     jk_map = {jk.kode_jam_kerja: jk for jk in jk_infos}
     
+    cabang_infos = db.query(Cabang).all()
+    cabang_map = {c.kode_cabang: c.nama_cabang for c in cabang_infos}
+    
     # 4. Get Patrol Sessions
     # Window: Tgl - 1 to Tgl + 1
     d_start = tgl - timedelta(days=1)
@@ -235,6 +239,9 @@ async def get_monitoring_regu(
         parts = key.split('|')
         cabang_code = parts[0]
         jk_code = parts[1]
+        
+        if kode_jam_kerja and jk_code != kode_jam_kerja:
+            continue
         
         jk = jk_map.get(jk_code)
         
@@ -351,7 +358,7 @@ async def get_monitoring_regu(
         if slot_kurang > 0: status_level = "perlu_tindak"
 
         # Cabang Name (Use code as fallback)
-        c_name = cabang_code # Could fetch from Cabang map if queried
+        c_name = cabang_map.get(cabang_code, cabang_code)
         
         regu_groups.append(ReguGroup(
             uid=key,

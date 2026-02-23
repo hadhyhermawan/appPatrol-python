@@ -61,7 +61,31 @@ def get_active_terms_android(
     terms = db.query(TermsAndConditions).filter(TermsAndConditions.is_active == True).order_by(TermsAndConditions.updated_at.desc()).first()
     if not terms:
         raise HTTPException(status_code=404, detail="No active terms and conditions found")
-    return terms
+
+    from app.models.compliance import UserAgreement
+    from app.models.privacy import PrivacyPolicy
+    
+    privacy_policy = db.query(PrivacyPolicy).filter(PrivacyPolicy.is_active == True).order_by(PrivacyPolicy.updated_at.desc()).first()
+    
+    out_version = terms.version
+    if privacy_policy:
+        existing_agreement = db.query(UserAgreement).filter(
+            UserAgreement.user_id == current_user.id,
+            UserAgreement.terms_version == terms.version,
+            UserAgreement.privacy_version == privacy_policy.version
+        ).first()
+        if existing_agreement:
+            out_version = ""
+
+    return TermsResponse(
+        id=terms.id,
+        title=terms.title,
+        content=terms.content,
+        version=out_version,
+        is_active=terms.is_active,
+        created_at=terms.created_at,
+        updated_at=terms.updated_at
+    )
 
 # GET all terms for admin dashboard
 @router.get("", response_model=List[TermsResponse])

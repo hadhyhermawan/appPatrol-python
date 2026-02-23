@@ -64,6 +64,7 @@ async def get_turlalin_list(
     search: Optional[str] = Query(None, description="Search by No Polisi"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     try:
@@ -77,6 +78,9 @@ async def get_turlalin_list(
         
         if date_end:
             query = query.filter(Turlalin.jam_masuk <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(Turlalin.jam_masuk)).limit(100).all()
         
@@ -221,6 +225,7 @@ async def get_safety_briefings(
     search: Optional[str] = Query(None, description="Search by Keterangan/Nama"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     try:
@@ -234,6 +239,9 @@ async def get_safety_briefings(
             
         if date_end:
             query = query.filter(SafetyBriefings.tanggal_jam <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(SafetyBriefings.tanggal_jam)).limit(100).all()
         
@@ -359,6 +367,7 @@ async def get_barang_list(
     search: Optional[str] = Query(None, description="Search by ID/Jenis/Dari/Untuk"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -377,6 +386,9 @@ async def get_barang_list(
             
         if date_end:
             query = query.filter(Barang.created_at <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Barang.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(Barang.created_at)).limit(limit).all()
         result = []
@@ -507,6 +519,7 @@ async def get_tamu_list(
     search: Optional[str] = Query(None, description="Search by Nama/Perusahaan/Keperluan"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -525,6 +538,9 @@ async def get_tamu_list(
             
         if date_end:
             query = query.filter(Tamu.jam_masuk <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(Tamu.jam_masuk)).limit(limit).all()
         
@@ -664,6 +680,8 @@ class PatrolSessionDTO(BaseModel):
     
     # Karyawan Info
     nama_petugas: Optional[str] = None
+    kode_cabang: Optional[str] = None
+    nama_cabang: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -683,6 +701,8 @@ async def get_patrol_list(
     search: Optional[str] = Query(None, description="Search by NIK/Nama"),
     date_start: Optional[date] = Query(None),
     date_end: Optional[date] = Query(None),
+    kode_cabang: Optional[str] = Query(None, description="Filter by Kode Cabang"),
+    kode_jam_kerja: Optional[str] = Query(None, description="Filter by Kode Jam Kerja (Shift)"),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -701,6 +721,12 @@ async def get_patrol_list(
             
         if date_end:
             query = query.filter(PatrolSessions.tanggal <= date_end)
+
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
+
+        if kode_jam_kerja:
+            query = query.filter(PatrolSessions.kode_jam_kerja == kode_jam_kerja)
             
         data = query.order_by(desc(PatrolSessions.created_at)).limit(limit).all()
         print(f"DEBUG PATROL QUERY FOUND: {len(data)} items")
@@ -716,6 +742,12 @@ async def get_patrol_list(
                 karyawan = db.query(Karyawan).filter(Karyawan.nik == item.nik).first()
                 if karyawan:
                     dto.nama_petugas = karyawan.nama_karyawan
+                    dto.kode_cabang = karyawan.kode_cabang
+                    # Ambil nama cabang dari model Cabang
+                    from app.models.models import Cabang
+                    cabang = db.query(Cabang).filter(Cabang.kode_cabang == karyawan.kode_cabang).first()
+                    if cabang:
+                        dto.nama_cabang = cabang.nama_cabang
                 
                 # Construct Foto Absen URL
                 if item.foto_absen:
@@ -988,6 +1020,7 @@ async def get_surat_masuk(
     search: Optional[str] = Query(None, description="Search by No Surat/Asal/Perihal"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -1005,6 +1038,9 @@ async def get_surat_masuk(
             
         if date_end:
             query = query.filter(SuratMasuk.tanggal_surat <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(SuratMasuk.tanggal_surat)).limit(limit).all()
         result = []
@@ -1116,6 +1152,7 @@ async def get_surat_keluar(
     search: Optional[str] = Query(None, description="Search by No Surat/Perihal"),
     date_start: Optional[datetime] = Query(None),
     date_end: Optional[datetime] = Query(None),
+    kode_cabang: Optional[str] = Query(None),
     limit: Optional[int] = Query(100, le=1000),
     db: Session = Depends(get_db)
 ):
@@ -1132,6 +1169,9 @@ async def get_surat_keluar(
             
         if date_end:
             query = query.filter(SuratKeluar.tanggal_surat <= date_end)
+            
+        if kode_cabang:
+            query = query.filter(Karyawan.kode_cabang == kode_cabang)
             
         data = query.order_by(desc(SuratKeluar.tanggal_surat)).limit(limit).all()
         result = []

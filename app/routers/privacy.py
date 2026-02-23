@@ -61,7 +61,31 @@ def get_active_privacy_android(
     privacy = db.query(PrivacyPolicy).filter(PrivacyPolicy.is_active == True).order_by(PrivacyPolicy.updated_at.desc()).first()
     if not privacy:
         raise HTTPException(status_code=404, detail="No active privacy policy found")
-    return privacy
+
+    from app.models.compliance import UserAgreement
+    from app.models.terms import TermsAndConditions
+    
+    terms_policy = db.query(TermsAndConditions).filter(TermsAndConditions.is_active == True).order_by(TermsAndConditions.updated_at.desc()).first()
+    
+    out_version = privacy.version
+    if terms_policy:
+        existing_agreement = db.query(UserAgreement).filter(
+            UserAgreement.user_id == current_user.id,
+            UserAgreement.terms_version == terms_policy.version,
+            UserAgreement.privacy_version == privacy.version
+        ).first()
+        if existing_agreement:
+            out_version = ""
+
+    return PrivacyResponse(
+        id=privacy.id,
+        title=privacy.title,
+        content=privacy.content,
+        version=out_version,
+        is_active=privacy.is_active,
+        created_at=privacy.created_at,
+        updated_at=privacy.updated_at
+    )
 
 # GET all privacy policies for admin dashboard
 @router.get("", response_model=List[PrivacyResponse])

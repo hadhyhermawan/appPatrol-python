@@ -53,19 +53,20 @@ def _send_fcm_to_niks(db: Session, niks: list, title: str, body: str, reminder_t
     if not niks:
         return
 
-    # Ambil 1 token terbaru per NIK
-    latest_subq = db.query(
-        KaryawanDevices.nik,
-        func.max(KaryawanDevices.updated_at).label('max_updated')
-    ).filter(KaryawanDevices.nik.in_(niks)).group_by(KaryawanDevices.nik).subquery()
+    all_devices = db.query(KaryawanDevices).filter(
+        KaryawanDevices.nik.in_(niks),
+        KaryawanDevices.fcm_token.isnot(None),
+        KaryawanDevices.fcm_token != ""
+    ).order_by(KaryawanDevices.id.desc()).all()
 
-    devices = db.query(KaryawanDevices).join(
-        latest_subq,
-        (KaryawanDevices.nik == latest_subq.c.nik) &
-        (KaryawanDevices.updated_at == latest_subq.c.max_updated)
-    ).all()
+    seen_niks = set()
+    tokens = []
+    for d in all_devices:
+        if d.nik not in seen_niks:
+            seen_niks.add(d.nik)
+            tokens.append(d.fcm_token)
 
-    tokens = [d.fcm_token for d in devices if d.fcm_token]
+
     if not tokens:
         logger.info(f"[Reminder:{reminder_type}] Tidak ada FCM token — skip")
         return
@@ -275,9 +276,24 @@ def run_reminder_check():
                             if sch.kode_jam_kerja and sch.kode_jam_kerja != kode_jk:
                                 continue
                                 
-                            # SYARAT MUTLAK: Karyawan harus sudah hadir (Absen Masuk) hari ini.
+                            # SYARAT MUTLAK 1: Karyawan harus sudah hadir (Absen Masuk) hari ini.
                             if not presensi or presensi.jam_in is None:
                                 continue
+                                    
+                            # SYARAT MUTLAK 2: Jika jam sekarang sudah di luar shift/jam pulang kerja aslinya, skip (misal ybs lupa absen pulang)
+                            jam_pulang = presensi.jam_out
+                            if not jam_pulang: # Lupa absen pulang
+                                _, jam_pulang_asli, _, _, _ = _get_jam_masuk_pulang(nik, db, today)
+                                if jam_pulang_asli:
+                                    # Hitung rentang sebenarnya
+                                    pulang_dt = datetime.combine(today, jam_pulang_asli).replace(tzinfo=TZ_WIB).replace(tzinfo=None)
+                                    jam_masuk_asli = jam_kerja_obj.jam_masuk if 'jam_kerja_obj' in locals() else None # fallback aman
+                                    # Jika jam malam
+                                    if hasattr(presensi, 'jam_masuk') and presensi.jam_masuk and jam_pulang_asli < presensi.jam_masuk:
+                                        pulang_dt += timedelta(days=1)
+                                    # Bandingkan jika sudah lewat dari batas kepulangan
+                                    if now > pulang_dt:
+                                        continue
 
                             # 3. Cek apakah di rentang jadwal Patroli ini sesi karyawan (atau rekan cabangnya) sudah done
                             # Window Schedule:

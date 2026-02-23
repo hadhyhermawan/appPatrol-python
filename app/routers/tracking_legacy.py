@@ -135,6 +135,11 @@ async def update_location(
                             messaging.send_each_for_multicast(msg)
                             print(f"MOCK LOCATION ESCALATION SENT for NIK: {user.nik}")
 
+                from app.models.models import LoginLogs
+                ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+                device_mdl = ll.device if ll else None
+                ip_addr = ll.ip if ll else None
+
                 # Catat ke security_reports agar dicentang sudah diingatkan
                 report = SecurityReports(
                     type='FAKE_GPS',
@@ -144,6 +149,8 @@ async def update_location(
                     latitude=latitude,
                     longitude=longitude,
                     status_flag='pending',
+                    device_model=device_mdl,
+                    ip_address=ip_addr,
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 )
@@ -227,6 +234,11 @@ async def update_location(
                                     messaging.send_each_for_multicast(msg)
                                     print(f"OUT OF LOCATION ESCALATION SENT for NIK: {user.nik}")
 
+                            from app.models.models import LoginLogs
+                            ll_out = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+                            device_mdl_out = ll_out.device if ll_out else None
+                            ip_addr_out = ll_out.ip if ll_out else None
+
                             # Catat ke security_reports
                             report = SecurityReports(
                                 type='OUT_OF_LOCATION',
@@ -236,6 +248,8 @@ async def update_location(
                                 latitude=latitude,
                                 longitude=longitude,
                                 status_flag='pending',
+                                device_model=device_mdl_out,
+                                ip_address=ip_addr_out,
                                 created_at=datetime.now(),
                                 updated_at=datetime.now()
                             )

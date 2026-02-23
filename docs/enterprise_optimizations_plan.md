@@ -61,5 +61,24 @@ Dokumen ini memuat cetak biru (*Blueprint*) progres dan daftar tugas (*Task List
 - [x] **Modul Endpoint:** `/api/android/security/report-abuse` (Python) & `MainActivity.kt` (Android).
 - [x] **Alur Modifikasi:** Android memantau kondisi *lifecycle*. Jika aplikasi dijalankan tapi sebelumnya tertutup tidak wajar (bukan `onDestroy` / ditutup paksa / Force Stop oleh Satpam untuk mencurangi waktu/lokasi), saat re-open, Android akan langsung mengirim `type=APP_FORCE_CLOSE` ke backend.
 - [x] **Aksi Backend:** Menerima laporan. Bila dalam jam dinas/shift aktif aplikasi dimatikan paksa, lapor Danru via FCM, dan berikan balasan Modal 'Peringatan Penutupan Paksa' di layar Satpam. **[Selesai! 🚀]**
+- [x] **Optimasi Dasbor:** Peringatan "Aplikasi Ditutup Paksa" dihapus dari *Popup Modal* layar penuh di Dasbor Web agar tidak mengganggu navigasi navigasi (Spamming), dan dipindahkan eksklusif ke dalam Ikon Notifikasi Header **[Selesai! 🚀]**
 
+---
 
+## 🛠️ Fase 4: Stabilitas Sesi & Pengalaman Pengguna (UX Bug Fixes)
+*Fokus:* Merapikan celah kritis pada alur login (terlempar tiba-tiba) dan repetisi persetujuan dokumen pengguna (EULA/Privacy) yang mengganggu kenyamanan.
+
+### Step 4.1: Sinkronisasi Zona Waktu Sesi (Timezone Token Issue) (Selesai)
+- [x] **Masalah:** Semua Karyawan terus terlempar keluar dari Android dengan pesan "Sesi berakhir karena login di perangkat lain". Hal ini memicu Force Logout berangkai.
+- [x] **Akar Penyebab (Root Cause):** Backend membandingkan waktu terbitnya token (menggunakan zona waktu UTC lokal `utcfromtimestamp`) dengan waktu tabel pengguna di Database (yang sudah terkonversi ke Waktu Jakarta/Lokal). Akibatnya, Token selalu dianggap "Lebih usang/kadaluarsa" dari `updated_at`.
+- [x] **Solusi Presisi:** Semua modul keamanan Android (`auth_legacy.py`, `permissions.py`) telah diseragamkan dengan membaca `fromtimestamp` agar waktu token setara dengan jam lokal Indonesia.
+
+### Step 4.2: Pencegahan Repetisi User Agreements & Privacy Policy (Selesai)
+- [x] **Masalah:** Aplikasi Android memunculkan terus Layar Syarat & Ketentuan setiap kali pengguna habis *Logout*/Login ulang, dan membuahkan ribuan duplikat baris persetujuan di Database (`user_agreements`).
+- [x] **Akar Penyebab (Root Cause):** Aplikasi Android membersihkan tembolok lokal (DataStore) setiap *logout*, dan saat login menganggap belum ada persetujuan yang ditandatangani. Di lain pihak, Backend asal mencatatkan data baru setiap dikirimkan persetujuan.
+- [x] **Solusi Bypass Backend:** Endpoint Cek Versi Aktif Android (`/api/android/terms/active` & `/api/android/privacy/active`) kini memeriksa secara diam-diam (*silent check*) ke dalam Database. Jika user sudah pernah menyetujui versi aktif, Backend membalas dengan versi kosong (`""`). Hasilnya, Android mengabaikan kemunculan *Modal* tersebut. Di saat yang bersamaan, perlindungan lapisan ganda di endpoint penyimpanan (`/api/android/compliance/agreement`) kini akan memblokir (*early return*) percobaan injeksi data bila divalidasi sebagai duplikat.
+
+### Step 4.3: Perbaikan Sinkronisasi Histori Jadwal Patroli (Selesai)
+- [x] **Masalah:** Pada riwayat jadwal patroli, status jadwal yang belum dikerjakan (pending) malah tercentang selesai (done) oleh nama karyawan lain yang mengerjakannya di masa depan/lampau, yang mengunci jadwal saat ini bagi shift berjalan.
+- [x] **Akar Penyebab (Root Cause):** Backend versi lama memvalidasi status grup menggunakan patokan waktu sistem di dalam database yang rentan bias timezone server (`created_at <= batas_akhir_jadwal`), alih-alih merujuk pada `tanggal` kalender yang dipasangkan dengan input `jam_patrol`.
+- [x] **Solusi Presisi:** Modul `/getPatrolHistory` dirombak untuk mengabaikan fungsi filter *query* rentang `created_at`. Evaluasi silang jadwal (termasuk deteksi tugas *cross-midnight* / lintas hari) kini dihitung di taraf memori menggunakan kombinasi natural objek tanggal kalender dan waktu (*Date Time Combine*) yang diisi oleh karyawan sesungguhnya saat absen, menciptakan representasi baris (*payload*) yang linier bagi antarmuka Android.

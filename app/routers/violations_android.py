@@ -4,7 +4,7 @@ from typing import Optional, List
 from datetime import datetime, date
 from app.database import get_db
 from app.models.models import Violation
-from app.routers.auth_legacy import get_current_user
+from app.routers.auth_legacy import get_current_user_data, CurrentUser
 from sqlalchemy import desc
 import os
 
@@ -19,9 +19,9 @@ def get_my_violations(
     page: int = 1,
     per_page: int = 50,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user_data)
 ):
-    nik = current_user.get("nik")
+    nik = current_user.nik
     if not nik:
         raise HTTPException(status_code=400, detail="User NIK not found")
 
@@ -66,9 +66,9 @@ def get_my_violations(
 def mark_violation_as_read(
     id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user_data)
 ):
-    nik = current_user.get("nik")
+    nik = current_user.nik
     if not nik:
         raise HTTPException(status_code=400, detail="User NIK not found")
 

@@ -393,6 +393,7 @@ async def get_logs(
     from_date: Optional[str] = Query(None, alias="from"),
     to_date: Optional[str] = Query(None, alias="to"),
     kode_cabang: Optional[str] = Query(None),
+    kode_dept: Optional[str] = Query(None),
     limit: int = 100,
     current_user: CurrentUser = Depends(require_permission_dependency("logs.index")),
     db: Session = Depends(get_db)
@@ -402,14 +403,31 @@ async def get_logs(
         
         # We need to join Karyawan and Cabang for proper filtering and data display
         # Note: Users -> Karyawan (via users_karyawan intermediate logic or direct if model supports it)
-        # Checking models.py... Users doesn't have direct Karyawan link easily without intermediate 'users_karyawan' which is not in the models.py snippets I saw?
-        # Let's check model definition again if needed.
-        # But wait, the Laravel query used: 
-        # ->leftJoin('users_karyawan', 'users.id', '=', 'users_karyawan.id_user')
-        # ->leftJoin('karyawan', 'users_karyawan.nik', '=', 'karyawan.nik')
-        
-        # Since I don't have 'users_karyawan' model in the imports, I might need to skip advanced joins for now or simplify.
-        # However, LoginLogs has user_id. Users has name/email.
+        if kode_cabang or kode_dept:
+            sql_filters = []
+            params = {}
+            if kode_cabang:
+                sql_filters.append("k.kode_cabang = :cabang")
+                params["cabang"] = kode_cabang
+            if kode_dept:
+                sql_filters.append("k.kode_dept = :dept")
+                params["dept"] = kode_dept
+                
+            where_clause = " AND ".join(sql_filters)
+            
+            matching_users = db.execute(text(f"""
+                SELECT uk.id_user
+                FROM users_karyawan uk
+                JOIN karyawan k ON uk.nik = k.nik
+                WHERE {where_clause}
+            """), params).fetchall()
+            
+            user_ids = [r[0] for r in matching_users]
+            
+            if not user_ids:
+                return []
+                
+            query = query.filter(LoginLogs.user_id.in_(user_ids))
         
         if user:
             query = query.filter(Users.name.like(f"%{user}%"))
@@ -435,7 +453,16 @@ async def get_logs(
             dto = LoginLogDTO.model_validate(log)
             dto.user_name = log.user.name if log.user else "Unknown"
             dto.email = log.user.email if log.user else "-"
-            # Branch name is harder without the full join, leaving empty for now or subsequent fetch
+            
+            branch_data = db.execute(text("""
+                SELECT c.nama_cabang
+                FROM users_karyawan uk
+                JOIN karyawan k ON uk.nik = k.nik
+                JOIN cabang c ON k.kode_cabang = c.kode_cabang
+                WHERE uk.id_user = :uid
+            """), {"uid": log.user_id}).fetchone()
+            
+            dto.branch_name = branch_data[0] if branch_data else "-"
             result.append(dto)
             
         return result
@@ -567,8 +594,12 @@ async def delete_security_report(id: int, db: Session = Depends(get_db)):
         db.delete(report)
         db.commit()
         return {"message": "Report deleted successfully"}
+    except HTTPException as he:
+        # Re-raise HTTPException without rolling back as it is likely a client-side error (404) or handled expectedly
+        raise he
     except Exception as e:
         db.rollback()
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==========================================

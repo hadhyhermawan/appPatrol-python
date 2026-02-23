@@ -399,13 +399,21 @@ async def request_bypass_radius(
         except:
             pass
 
+    from app.models.models import LoginLogs
+    ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+    device_mdl = ll.device if ll else None
+    ip_addr = ll.ip if ll else None
+
     report = SecurityReports(
+        user_id=user.id,
         type='RADIUS_BYPASS',
         detail=f"Meminta izin absen luar tapak. Alasan: {keterangan or 'GPS tidak akurat'}.",
         nik=nik,
         latitude=latitude,
         longitude=longitude,
         status_flag='pending',
+        device_model=device_mdl,
+        ip_address=ip_addr,
         created_at=datetime.now(),
         updated_at=datetime.now()
     )

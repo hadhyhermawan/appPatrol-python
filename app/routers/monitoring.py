@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from app.database import get_db
-from app.models.models import Presensi, Karyawan, Departemen, PresensiJamkerja
+from app.models.models import Presensi, Karyawan, Departemen, PresensiJamkerja, Cabang
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import date, datetime, time
@@ -23,6 +23,7 @@ class PresensiItem(BaseModel):
     nik: str
     nama_karyawan: Optional[str]
     nama_dept: Optional[str]
+    nama_cabang: Optional[str]
     nama_jam_kerja: Optional[str]
     jam_in: Optional[str]
     jam_out: Optional[str]
@@ -74,6 +75,8 @@ def _parse_to_datetime(val: Optional[str], ref_date: date) -> Optional[datetime]
 async def get_monitoring_presensi(
     date: Optional[date] = Query(None),
     dept_code: Optional[str] = Query(None),
+    cabang_code: Optional[str] = Query(None),
+    kode_jam_kerja: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -85,6 +88,7 @@ async def get_monitoring_presensi(
             Presensi.nik,
             Karyawan.nama_karyawan,
             Departemen.nama_dept,
+            Cabang.nama_cabang,
             PresensiJamkerja.nama_jam_kerja,
             Presensi.jam_in,
             Presensi.jam_out,
@@ -97,12 +101,17 @@ async def get_monitoring_presensi(
             Presensi.tanggal,
         ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik) \
          .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept) \
+         .outerjoin(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang) \
          .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)
 
         if date:
             query = query.filter(Presensi.tanggal == date)
         if dept_code:
             query = query.filter(Karyawan.kode_dept == dept_code)
+        if cabang_code:
+            query = query.filter(Karyawan.kode_cabang == cabang_code)
+        if kode_jam_kerja:
+            query = query.filter(Presensi.kode_jam_kerja == kode_jam_kerja)
         if search:
             st = f"%{search}%"
             query = query.filter(
@@ -121,6 +130,7 @@ async def get_monitoring_presensi(
                 nik=row.nik,
                 nama_karyawan=row.nama_karyawan or "Unknown",
                 nama_dept=row.nama_dept or "-",
+                nama_cabang=row.nama_cabang or "-",
                 nama_jam_kerja=row.nama_jam_kerja or "-",
                 jam_in=row.jam_in.strftime("%H:%M:%S") if row.jam_in else "-",
                 jam_out=row.jam_out.strftime("%H:%M:%S") if row.jam_out else "-",
@@ -158,21 +168,23 @@ async def get_monitoring_presensi(
 async def get_monitoring_presensi_detail(id: int, db: Session = Depends(get_db)):
     try:
         result = db.query(
-            Presensi, Karyawan.nama_karyawan, Departemen.nama_dept, PresensiJamkerja.nama_jam_kerja
+            Presensi, Karyawan.nama_karyawan, Departemen.nama_dept, Cabang.nama_cabang, PresensiJamkerja.nama_jam_kerja
         ).outerjoin(Karyawan, Presensi.nik == Karyawan.nik) \
          .outerjoin(Departemen, Karyawan.kode_dept == Departemen.kode_dept) \
+         .outerjoin(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang) \
          .outerjoin(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja) \
          .filter(Presensi.id == id).first()
 
         if not result:
             raise HTTPException(status_code=404, detail="Data presensi tidak ditemukan")
 
-        presensi, nama_karyawan, nama_dept, nama_jam_kerja = result
+        presensi, nama_karyawan, nama_dept, nama_cabang, nama_jam_kerja = result
         return PresensiItem(
             id=presensi.id,
             nik=presensi.nik,
             nama_karyawan=nama_karyawan or "Unknown",
             nama_dept=nama_dept or "-",
+            nama_cabang=nama_cabang or "-",
             nama_jam_kerja=nama_jam_kerja or "-",
             jam_in=presensi.jam_in.strftime("%H:%M:%S") if presensi.jam_in else "-",
             jam_out=presensi.jam_out.strftime("%H:%M:%S") if presensi.jam_out else "-",

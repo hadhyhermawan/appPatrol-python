@@ -357,8 +357,8 @@ async def get_current_user(
     # Session Reset Logic: Check if token is older than user's last update
     if "iat" in payload and user.updated_at:
         token_iat = payload["iat"]
-        # Convert IAT (timestamp) to naive datetime (UTC) to match user.updated_at which is stored as naive UTC
-        token_dt = datetime.utcfromtimestamp(token_iat)
+        # Convert IAT (timestamp) to naive datetime matching local timezone
+        token_dt = datetime.fromtimestamp(token_iat)
         
         # Buffer of 2 seconds for any tiny clock skews or DB roundtrip time
         if token_dt < (user.updated_at - timedelta(seconds=2)):

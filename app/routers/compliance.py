@@ -32,6 +32,24 @@ def create_agreement(
     current_user = Depends(get_current_user_sanctum) # Legacy Sanctum Auth for Mobile
 ):
     try:
+        # Check if identical agreement already exists
+        existing = db.query(UserAgreement).filter(
+            UserAgreement.user_id == current_user.id,
+            UserAgreement.terms_version == request.terms_version,
+            UserAgreement.privacy_version == request.privacy_version
+        ).first()
+
+        if existing:
+            # Update device info if it changed
+            if request.device_info and existing.device_info != request.device_info:
+                existing.device_info = request.device_info
+                db.commit()
+            
+            return AgreementResponse(
+                message="Agreement already recorded",
+                agreed_at=existing.agreed_at.isoformat() if existing.agreed_at else ""
+            )
+
         new_agreement = UserAgreement(
             user_id=current_user.id,
             terms_version=request.terms_version,

@@ -67,6 +67,11 @@ Inilah urutan eksekusi alarm di lapangan:
    - Server memiliki batas ambang waktu **Eksklusif ("Kurang Dari")**. Begitu jarum menaruh pada pukul `14:00:00`, sistem secara otomatis menyematkan tiket "**Missed/Terlewat**" untuk jadwal Patrol 3 dan secara murni cuma melayani periode _Shift Patrol 4 (14:00 - 15:59:59)_.
    - **Hasil:** Pak Budi **TIDAK AKAN** mendengar tabrakan tembakan ganda / alarm ganda di jam 14.00, karena Patrol 3 dinyatakan resmi gugur (*Expired*) di saat yang bersamaan dengan awal mula Patrol 4.
 
+6. **Klausa Pembatalan Otomatis: Batas Shift Berakhir (Cross-Day/Ghost Call Fix):**
+   - Kasus: Bagaimana jika karyawan menyelesaikan patrolinya hari itu, tapi dia **Lupa menekan tombol Absen Pulang (Check-Out)**? Apakah _Cron Job_ akan terus berdering (mengirim Ping gaib) tiap 5 menit untuk jadwal patroli di hari esoknya karena status `jam_out`-nya tercatat kosong di DB?
+   - **TIDAK**. Server memiliki deteksi lapis dua (_Syarat Mutlak 2: Shift Expiry_). Server akan mengambil jam kepulangan aslinya (`jam_pulang_asli`) pada hari itu. Jika jam real-time saat ini sudah jauh melewati batas _shift_-nya, permintaan notifikasi akan otomatis **Dibatalkan (*Suppressed*)**.
+   - Sistem ini juga otomatis beradaptasi dengan **Shift Malam Lintas Hari** (Misal masuk 16:00, kepulangan 08:00 keesokan harinya). Server otomatis mentranslasikan batas ambang akhirnya menjadi: *(Hari Ini + 1 Hari)* pukul 08:00 WIB. Lewat dari detik itu, HP karyawan dijamin hening kembali agar tak mengganggu jam istirahat.
+
 ---
 
 ## 2. Alur Notifikasi Bypass & Chat

@@ -1,3 +1,9 @@
+# PROJECT DOCUMENTATION
+> ⚠️ **PERHATIAN (CRITICAL WARNING)** ⚠️
+> **SELURUH KODE SISTEM SUDAH PUBLISH KE PRODUCTION.**  
+> **Aplikasi Android "GuardSystemApp" (K3Guard) saat ini sudah resmi *listing/live* di Google Play Store.**
+> Segala bentuk perubahan kode, _testing_, eksekusi _script_, atau manipulasi basis data pada _Backend_ maupun _Frontend_ akan langsung berdampak kepada seluruh pengguna yang sedang berdinas (Satpam/Karyawan) di lapangan.  
+> **HARAP BERHATI-HATI DAN SELALU JALANKAN UJI COBA (UNIT TESTING) SEBELUM MERILIS PERUBAHAN.**
 
 ## 21. Fix Absensi Fallback (NON SHIFT)
 - Date: 2026-02-21
@@ -65,3 +71,13 @@
   1. Replaced `DropdownItem` with native Next.js `Link` components in the Approvals section of `NotificationDropdown.tsx` to ensure hydration and routing trigger correctly.
   2. Subscribed `AppSidebar.tsx` to the backend `/api/security/notifications/summary` polling every 60s, using an anti-cache timestamp (`?t=timestamp`) to bypass persistent Next.js router cache. Displayed a dynamic red badge counter next to precisely the "Pengajuan Absen" menu item.
 - **Status**: Tested on production, built successfully without eslint errors via PM2.
+
+## 30. Mencegah Kebocoran Pengingat Patroli Paska Pulang Shift
+- Date: 2026-02-23
+- Repos: appPatrol-python
+- **Issue**: Karyawan yang lupa "Check-Out/Absen Pulang" mendapati dirinya terus menerus di-*spam* pop-up dan suara *Reminder Patroli* (Ping Audio per 5 menit) hingga keesokan harinya, meskipun Shift-nya terhitung sebenarnya sudah selesai.
+- **Solution**: 
+  1. Menyesuaikan ulang validasi pada `run_reminder_check()` di `app/services/reminder_scheduler.py`.
+  2. Implementasi **Syarat Mutlak 2**: Jika waktu real-time server (`now`) sudah lebih besar dari *batas jadwal kepulangan aslinya* berdasarkan shift miliknya hari itu (`jam_pulang_asli`), server diinstruksikan untuk menjalankan `continue` atau mengabaikan tembakan pesan pengingat (`Suppressed`) terlepas dari apakah field absen `jam_out` Kosong / N/A.
+  3. Memisahkan pengujian dengan modul Python `pytest` via `test_patrol_reminder_logic.py`, termasuk simulasi jadwal transisi *Lintas Hari / Shift Malam* (*Cross-Day Support*).
+- **Status**: Modul pengingat di *_Cron_ Job* telah diverifikasi berjalan eksklusif sesuai durasi shift. Server telah di-restart (*Live*).

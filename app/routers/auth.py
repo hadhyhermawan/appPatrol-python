@@ -27,7 +27,7 @@ router = APIRouter(
 )
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest, db: Session = Depends(get_db)):
+async def login(req: Request, request: LoginRequest, db: Session = Depends(get_db)):
     try:
         # 1. Cari user
         user = db.query(Users).filter(Users.username == request.username).first()
@@ -78,12 +78,16 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         access_token = create_access_token(data={"sub": str(user.id), "username": user.username})
         
         # 5. Log Login
+        real_ip = req.headers.get("x-forwarded-for", req.client.host if req.client else "127.0.0.1")
+        if real_ip:
+            real_ip = real_ip.split(",")[0].strip()
+
         log = LoginLogs(
             user_id=user.id,
-            ip="127.0.0.1", # TODO: Get real IP from request
+            ip=real_ip[:45],
             device=request.device_model or "Unknown",
             android_version=request.android_version,
-            login_at=datetime.utcnow()
+            login_at=datetime.utcnow() + timedelta(hours=7)
         )
         db.add(log)
         db.commit()
@@ -177,7 +181,7 @@ async def get_current_user(
         # Session Reset Logic: Check if token is older than user's last update
         if "iat" in payload and user.updated_at:
             token_iat = payload["iat"]
-            token_dt = datetime.utcfromtimestamp(token_iat)
+            token_dt = datetime.fromtimestamp(token_iat)
             if token_dt < (user.updated_at - timedelta(seconds=2)):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,

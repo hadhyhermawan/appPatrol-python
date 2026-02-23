@@ -418,11 +418,21 @@ async def patroli_absen(
         dist = haversine_great_circle_distance(ulat, ulon, clat, clon)
         if dist > cabang.radius_cabang:
             try:
+                from app.models.models import LoginLogs
+                ll = db.query(LoginLogs).filter(LoginLogs.user_id == current_user.id).order_by(LoginLogs.id.desc()).first()
+                device_mdl = ll.device if ll else None
+                ip_addr = ll.ip if ll else None
+
                 rep = SecurityReports(
+                    user_id=current_user.id,
                     nik=nik,
                     type='OUT_OF_LOCATION',
                     detail=f"Terdeteksi Absen Patroli di luar jangkauan (Jarak: {int(dist)}m dari Max Radius {int(cabang.radius_cabang)}m)",
-                    status_flag='pending'
+                    status_flag='pending',
+                    device_model=device_mdl,
+                    ip_address=ip_addr,
+                    latitude=ulat,
+                    longitude=ulon
                 )
                 db.add(rep)
                 db.commit()
@@ -430,11 +440,25 @@ async def patroli_absen(
                 db.rollback()
             return {"status": False, "message": "Anda berada di luar radius kantor."}
              
-    # Anti double (simple)
-    existing = db.query(PatrolSessions).filter(PatrolSessions.nik == nik, PatrolSessions.tanggal == tanggal, PatrolSessions.kode_jam_kerja == presensi.kode_jam_kerja).order_by(PatrolSessions.id.desc()).first()
+    # Anti double / Multi-tap prevent
+    # Cek apakah masih ada sesi patroli yang aktif (belum complete) pada shift ini
+    existing = db.query(PatrolSessions).filter(
+        PatrolSessions.nik == nik, 
+        PatrolSessions.tanggal == tanggal, 
+        PatrolSessions.kode_jam_kerja == presensi.kode_jam_kerja,
+        PatrolSessions.status == 'active'
+    ).order_by(PatrolSessions.id.desc()).first()
+    
     if existing:
-        # Check time diff
-        pass # Skip for brevity
+        subfolder_ex = f"{nik}-{tanggal_fmt}-absenpatrol"
+        foto_url_ex = f"https://frontend.k3guard.com/api-py/storage/uploads/patroli/{subfolder_ex}/{existing.foto_absen}" if existing.foto_absen else ""
+        return {
+            "status": True,
+            "message": "Melanjutkan sesi patroli sebelumnya",
+            "session_id": existing.id,
+            "foto_url": foto_url_ex
+        }
+
         
     # Save Image
     subfolder = f"{nik}-{tanggal_fmt}-absenpatrol"
@@ -673,11 +697,23 @@ def _build_schedule_tasks_for_day(
             end_dt += timedelta(days=1)
 
         # Apakah sudah ada session dalam window ini dari grup?
-        session_in_window = db.query(PatrolSessions).filter(
+        # Gunakan tanggal dan jam_patrol, MENGABAIKAN created_at yang bisa bermasalah zona waktu
+        group_sessions = db.query(PatrolSessions).filter(
             PatrolSessions.nik.in_(group_niks),
-            PatrolSessions.created_at >= start_dt,
-            PatrolSessions.created_at <= end_dt
-        ).first()
+            PatrolSessions.tanggal == target_date
+        ).all()
+        
+        session_in_window = None
+        for sess in group_sessions:
+            if sess.jam_patrol:
+                sess_date_base = sess.tanggal
+                if is_lintashari and sess.jam_patrol < jam_kerja.jam_masuk:
+                    sess_date_base = sess_date_base + timedelta(days=1)
+                
+                sess_dt = datetime.combine(sess_date_base, sess.jam_patrol)
+                if start_dt <= sess_dt <= end_dt:
+                    session_in_window = sess
+                    break
 
         if session_in_window:
             status = 'done'
