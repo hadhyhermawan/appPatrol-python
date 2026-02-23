@@ -137,7 +137,7 @@ async def update_location(
 
                 from app.models.models import LoginLogs
                 ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
-                device_mdl = ll.device if ll else None
+                device_mdl = ll.device if ll and ll.device else "Unknown"
                 ip_addr = ll.ip if ll else None
 
                 # Catat ke security_reports agar dicentang sudah diingatkan
@@ -236,7 +236,7 @@ async def update_location(
 
                             from app.models.models import LoginLogs
                             ll_out = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
-                            device_mdl_out = ll_out.device if ll_out else None
+                            device_mdl_out = ll_out.device if ll_out and ll_out.device else "Unknown"
                             ip_addr_out = ll_out.ip if ll_out else None
 
                             # Catat ke security_reports

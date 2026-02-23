@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, s
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from app.database import get_db
-from app.routers.auth_legacy import get_current_user_nik
+from app.routers.auth_legacy import get_current_user_nik, get_current_user_data, CurrentUser
 from app.models.models import Presensi, PresensiJamkerja, Karyawan, PengaturanUmum
 from datetime import datetime, date, timedelta
 import shutil
@@ -374,11 +374,12 @@ async def absen(
 async def request_bypass_radius(
     lokasi: str = Form(None),
     keterangan: str = Form(None),
-    nik: str = Depends(get_current_user_nik),
+    user: CurrentUser = Depends(get_current_user_data),
     db: Session = Depends(get_db)
 ):
     from app.models.models import SecurityReports, Karyawan, KaryawanDevices, Cabang
     from firebase_admin import messaging
+    nik = user.nik
     
     # 1. Pastikan belum ada request pending
     existing = db.query(SecurityReports).filter(
@@ -401,7 +402,7 @@ async def request_bypass_radius(
 
     from app.models.models import LoginLogs
     ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
-    device_mdl = ll.device if ll else None
+    device_mdl = ll.device if ll and ll.device else "Unknown"
     ip_addr = ll.ip if ll else None
 
     report = SecurityReports(
