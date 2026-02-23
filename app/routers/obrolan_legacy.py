@@ -146,10 +146,14 @@ async def send_message(request: Request, db: Session = Depends(get_db)):
                 attachment_type = "file"
 
         # Create Message
+        # Fix: Android sometimes sends NIK as sender_nama. Force lookup actual name.
+        karyawan = db.query(Karyawan).filter(Karyawan.nik == sender_id).first()
+        actual_sender_nama = karyawan.nama_karyawan if karyawan else (sender_nama or sender_id)
+
         new_msg = WalkieRtcMessages(
             room=room,
             sender_id=sender_id,
-            sender_nama=sender_nama or sender_id,
+            sender_nama=actual_sender_nama,
             role=role or "user",
             message=message or "",
             reply_to=str(reply_to) if reply_to else None,
