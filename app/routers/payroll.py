@@ -399,11 +399,11 @@ async def get_tunjangan_by_id(kode: str, db: Session):
     
     details_dto = []
     total = 0
-    for d in item.details:
+        for d in item.details:
             detail_item = TunjanganDetailDTO(
                 kode_jenis_tunjangan=d.kode_jenis_tunjangan,
                 jumlah=d.jumlah,
-                jenis_tunjangan_nama=d.jenis_tunjangan.jenis_tunjangan if d.jenis_tunjangan else None
+                jenis_tunjangan_nama="" if not d.jenis_tunjangan else d.jenis_tunjangan.jenis_tunjangan
             )
             details_dto.append(detail_item)
             total += d.jumlah

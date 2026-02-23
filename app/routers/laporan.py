@@ -316,7 +316,7 @@ async def get_rekap_presensi(
             data_tanggal = {}
             summary = {
                 "hadir": 0, "sakit": 0, "izin": 0, "alpha": 0, "cuti": 0, 
-                "terlambat": 0, "tidak_scan_masuk": 0, "tidak_scan_pulang": 0
+                "terlambat": 0, "tidak_scan_masuk": 0, "tidak_scan_pulang": 0, "ta": 0
             }
             
             employee_presensi = presensi_map.get(k.nik, {})
@@ -331,10 +331,10 @@ async def get_rekap_presensi(
                 }
                 
                 if record:
-                    cell_data["status"] = record["status"]
-                    status = record["status"]
+                    raw_status = record["status"].lower() if record.get("status") else "-"
+                    cell_data["status"] = raw_status
                     
-                    if status == 'h':
+                    if raw_status == 'h':
                         summary["hadir"] += 1
                         
                         # Late Check
@@ -346,14 +346,17 @@ async def get_rekap_presensi(
                         if not record["jam_in"]: summary["tidak_scan_masuk"] += 1
                         if not record["jam_out"]: summary["tidak_scan_pulang"] += 1
                         
-                    elif status == 's': summary["sakit"] += 1
-                    elif status == 'i': summary["izin"] += 1
-                    elif status == 'c': summary["cuti"] += 1
-                    elif status == 'a': summary["alpha"] += 1
+                    elif raw_status == 's': summary["sakit"] += 1
+                    elif raw_status == 'i': summary["izin"] += 1
+                    elif raw_status == 'c': summary["cuti"] += 1
+                    elif raw_status == 'a': summary["alpha"] += 1
+                    elif raw_status in ['ta', 'ct', 'dl', 'lb']: 
+                        # Count TA as TA specifically for frontend
+                        if raw_status == 'ta':
+                            summary["ta"] += 1
                     
                 else:
-                    # No record -> Check Calendar/Holiday/Schedule?
-                    # For now assume Alpha
+                    # No record -> treat as Alpha
                     summary["alpha"] += 1
                 
                 data_tanggal[d_str] = cell_data
