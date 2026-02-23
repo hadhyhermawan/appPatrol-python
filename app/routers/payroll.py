@@ -260,6 +260,9 @@ class TunjanganDetailDTO(BaseModel):
     kode_jenis_tunjangan: str
     jenis_tunjangan_nama: Optional[str] = None
     jumlah: int
+    
+    class Config:
+        from_attributes = True
 
 class CreateTunjanganDTO(BaseModel):
     nik: str
@@ -320,7 +323,7 @@ async def get_tunjangan(
              detail_item = TunjanganDetailDTO(
                  kode_jenis_tunjangan=d.kode_jenis_tunjangan,
                  jumlah=d.jumlah,
-                 jenis_tunjangan_nama=d.jenis_tunjangan.jenis_tunjangan if d.jenis_tunjangan else None
+                 jenis_tunjangan_nama="" if not d.jenis_tunjangan else d.jenis_tunjangan.jenis_tunjangan
              )
              details_dto.append(detail_item)
              total += d.jumlah
