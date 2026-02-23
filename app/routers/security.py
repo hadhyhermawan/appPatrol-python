@@ -980,6 +980,7 @@ class SuratMasukDTO(BaseModel):
     
     # Karyawan Info
     nama_satpam: Optional[str] = None
+    nama_satpam_pengantar: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -1002,6 +1003,7 @@ class SuratKeluarDTO(BaseModel):
     tanggal_diterima: Optional[datetime]
     
     nama_satpam: Optional[str] = None
+    nama_satpam_pengantar: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -1055,6 +1057,11 @@ async def get_surat_masuk(
             dto = SuratMasukDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_satpam = item.karyawan.nama_karyawan
+            
+            if item.nik_satpam_pengantar:
+                pengantar = db.query(Karyawan).filter(Karyawan.nik == item.nik_satpam_pengantar).first()
+                if pengantar:
+                    dto.nama_satpam_pengantar = pengantar.nama_karyawan
             
             if dto.foto and not dto.foto.startswith(('http', 'https')):
                 dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
@@ -1186,6 +1193,11 @@ async def get_surat_keluar(
             dto = SuratKeluarDTO.from_orm(item)
             if item.karyawan:
                 dto.nama_satpam = item.karyawan.nama_karyawan
+            
+            if item.nik_satpam_pengantar:
+                pengantar = db.query(Karyawan).filter(Karyawan.nik == item.nik_satpam_pengantar).first()
+                if pengantar:
+                    dto.nama_satpam_pengantar = pengantar.nama_karyawan
             
             if dto.foto and not dto.foto.startswith(('http', 'https')):
                 dto.foto = f"{STORAGE_BASE_URL}{dto.foto}"
