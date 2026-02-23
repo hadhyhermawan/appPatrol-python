@@ -136,7 +136,12 @@ async def update_location(
                             print(f"MOCK LOCATION ESCALATION SENT for NIK: {user.nik}")
 
                 from app.models.models import LoginLogs
-                ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+                ll = db.query(LoginLogs).filter(
+                    LoginLogs.user_id == user.id,
+                    LoginLogs.device != None,
+                    LoginLogs.device != 'Unknown',
+                    LoginLogs.android_version != None
+                ).order_by(LoginLogs.id.desc()).first()
                 device_mdl = ll.device if ll and ll.device else "Unknown"
                 ip_addr = ll.ip if ll else None
 
@@ -235,7 +240,12 @@ async def update_location(
                                     print(f"OUT OF LOCATION ESCALATION SENT for NIK: {user.nik}")
 
                             from app.models.models import LoginLogs
-                            ll_out = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+                            ll_out = db.query(LoginLogs).filter(
+                                LoginLogs.user_id == user.id,
+                                LoginLogs.device != None,
+                                LoginLogs.device != 'Unknown',
+                                LoginLogs.android_version != None
+                            ).order_by(LoginLogs.id.desc()).first()
                             device_mdl_out = ll_out.device if ll_out and ll_out.device else "Unknown"
                             ip_addr_out = ll_out.ip if ll_out else None
 

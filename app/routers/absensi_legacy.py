@@ -401,7 +401,12 @@ async def request_bypass_radius(
             pass
 
     from app.models.models import LoginLogs
-    ll = db.query(LoginLogs).filter(LoginLogs.user_id == user.id).order_by(LoginLogs.id.desc()).first()
+    ll = db.query(LoginLogs).filter(
+        LoginLogs.user_id == user.id,
+        LoginLogs.device != None,
+        LoginLogs.device != 'Unknown',
+        LoginLogs.android_version != None
+    ).order_by(LoginLogs.id.desc()).first()
     device_mdl = ll.device if ll and ll.device else "Unknown"
     ip_addr = ll.ip if ll else None
 

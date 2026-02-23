@@ -419,8 +419,13 @@ async def patroli_absen(
         if dist > cabang.radius_cabang:
             try:
                 from app.models.models import LoginLogs
-                ll = db.query(LoginLogs).filter(LoginLogs.user_id == current_user.id).order_by(LoginLogs.id.desc()).first()
-                device_mdl = ll.device if ll else None
+                ll = db.query(LoginLogs).filter(
+                    LoginLogs.user_id == current_user.id,
+                    LoginLogs.device != None,
+                    LoginLogs.device != 'Unknown',
+                    LoginLogs.android_version != None
+                ).order_by(LoginLogs.id.desc()).first()
+                device_mdl = ll.device if ll and ll.device else "Unknown"
                 ip_addr = ll.ip if ll else None
 
                 rep = SecurityReports(
@@ -432,7 +437,9 @@ async def patroli_absen(
                     device_model=device_mdl,
                     ip_address=ip_addr,
                     latitude=ulat,
-                    longitude=ulon
+                    longitude=ulon,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
                 )
                 db.add(rep)
                 db.commit()
