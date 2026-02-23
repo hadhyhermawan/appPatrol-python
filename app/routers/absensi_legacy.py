@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from app.database import get_db
@@ -372,6 +372,7 @@ async def absen(
 
 @router.post("/request-bypass-radius")
 async def request_bypass_radius(
+    request: Request,
     lokasi: str = Form(None),
     keterangan: str = Form(None),
     user: CurrentUser = Depends(get_current_user_data),
@@ -408,7 +409,13 @@ async def request_bypass_radius(
         LoginLogs.android_version != None
     ).order_by(LoginLogs.id.desc()).first()
     device_mdl = ll.device if ll and ll.device else "Unknown"
-    ip_addr = ll.ip if ll else None
+
+    real_ip = request.headers.get("x-forwarded-for")
+    if real_ip:
+        real_ip = real_ip.split(",")[0].strip()
+    if not real_ip:
+        real_ip = request.client.host if request.client else "127.0.0.1"
+    ip_addr = real_ip[:45]
 
     report = SecurityReports(
         user_id=user.id,

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, and_, or_
 from app.database import get_db
@@ -392,6 +392,7 @@ async def get_absen_patrol(
 
 @router.post("/absen")
 async def patroli_absen(
+    request: Request,
     loc_patrol: str = Form(...),
     foto_patrol: UploadFile = File(...),
     current_user: CurrentUser = Depends(get_current_user_data),
@@ -418,6 +419,13 @@ async def patroli_absen(
         dist = haversine_great_circle_distance(ulat, ulon, clat, clon)
         if dist > cabang.radius_cabang:
             try:
+                real_ip = request.headers.get("x-forwarded-for")
+                if real_ip:
+                    real_ip = real_ip.split(",")[0].strip()
+                if not real_ip:
+                    real_ip = request.client.host if request.client else "127.0.0.1"
+                ip_addr = real_ip[:45]
+
                 from app.models.models import LoginLogs
                 ll = db.query(LoginLogs).filter(
                     LoginLogs.user_id == current_user.id,
@@ -426,7 +434,6 @@ async def patroli_absen(
                     LoginLogs.android_version != None
                 ).order_by(LoginLogs.id.desc()).first()
                 device_mdl = ll.device if ll and ll.device else "Unknown"
-                ip_addr = ll.ip if ll else None
 
                 rep = SecurityReports(
                     user_id=current_user.id,

@@ -230,7 +230,13 @@ async def report_abuse(
 ):
     used_nik = user.nik if user.nik else nik
     
-    ip_address = request.headers.get("x-forwarded-for", request.client.host if request.client else "127.0.0.1")
+    real_ip = request.headers.get("x-forwarded-for")
+    if real_ip:
+        real_ip = real_ip.split(",")[0].strip()
+    if not real_ip:
+        real_ip = request.client.host if request.client else "127.0.0.1"
+    ip_address = real_ip[:45]
+    
     user_agent = request.headers.get("user-agent", "")
     
     report = SecurityReports(

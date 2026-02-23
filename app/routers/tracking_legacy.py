@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Form
+from fastapi import APIRouter, Depends, HTTPException, Body, Form, Request
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -23,6 +23,7 @@ router = APIRouter(
 
 @router.post("/tracking/location")
 async def update_location(
+    request: Request,
     latitude: float = Form(...),
     longitude: float = Form(...),
     accuracy: float = Form(None),
@@ -135,6 +136,13 @@ async def update_location(
                             messaging.send_each_for_multicast(msg)
                             print(f"MOCK LOCATION ESCALATION SENT for NIK: {user.nik}")
 
+                real_ip = request.headers.get("x-forwarded-for")
+                if real_ip:
+                    real_ip = real_ip.split(",")[0].strip()
+                if not real_ip:
+                    real_ip = request.client.host if request.client else "127.0.0.1"
+                ip_addr = real_ip[:45]
+
                 from app.models.models import LoginLogs
                 ll = db.query(LoginLogs).filter(
                     LoginLogs.user_id == user.id,
@@ -143,7 +151,6 @@ async def update_location(
                     LoginLogs.android_version != None
                 ).order_by(LoginLogs.id.desc()).first()
                 device_mdl = ll.device if ll and ll.device else "Unknown"
-                ip_addr = ll.ip if ll else None
 
                 # Catat ke security_reports agar dicentang sudah diingatkan
                 report = SecurityReports(
@@ -239,6 +246,13 @@ async def update_location(
                                     messaging.send_each_for_multicast(msg)
                                     print(f"OUT OF LOCATION ESCALATION SENT for NIK: {user.nik}")
 
+                            real_ip = request.headers.get("x-forwarded-for")
+                            if real_ip:
+                                real_ip = real_ip.split(",")[0].strip()
+                            if not real_ip:
+                                real_ip = request.client.host if request.client else "127.0.0.1"
+                            ip_addr_out = real_ip[:45]
+
                             from app.models.models import LoginLogs
                             ll_out = db.query(LoginLogs).filter(
                                 LoginLogs.user_id == user.id,
@@ -247,7 +261,6 @@ async def update_location(
                                 LoginLogs.android_version != None
                             ).order_by(LoginLogs.id.desc()).first()
                             device_mdl_out = ll_out.device if ll_out and ll_out.device else "Unknown"
-                            ip_addr_out = ll_out.ip if ll_out else None
 
                             # Catat ke security_reports
                             report = SecurityReports(
