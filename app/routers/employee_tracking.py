@@ -156,14 +156,13 @@ async def get_map_data(
         # Only those with locations and active shift
         # Filters
         # Only those with locations and active shift
-        # REVISI: Show ALL employees
-        # query = query.filter(
-        #     EmployeeLocations.latitude.isnot(None),
-        #     EmployeeLocations.longitude.isnot(None),
-        #     Presensi.id.isnot(None),
-        #     Presensi.kode_jam_kerja.isnot(None),
-        #     PresensiJamkerja.kode_jam_kerja.isnot(None)
-        # )
+        query = query.filter(
+            EmployeeLocations.latitude.isnot(None),
+            EmployeeLocations.longitude.isnot(None),
+            Presensi.id.isnot(None),
+            Presensi.kode_jam_kerja.isnot(None),
+            PresensiJamkerja.kode_jam_kerja.isnot(None)
+        )
 
         if kode_cabang:
             # Simple check, exact match or like name
