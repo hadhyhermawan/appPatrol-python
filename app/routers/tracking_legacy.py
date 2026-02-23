@@ -212,9 +212,15 @@ async def update_location(
                         ).first()
 
                         if not recent_out_alert:
-                            target_karyawans = db.query(Karyawan.nik).filter(
+                            target_karyawans = db.query(Karyawan.nik).join(
+                                Presensi, Karyawan.nik == Presensi.nik
+                            ).filter(
                                 Karyawan.kode_cabang == karyawan_pelanggar.kode_cabang,
-                                Karyawan.nik != user.nik
+                                Karyawan.nik != user.nik,
+                                Presensi.tanggal == today_date,
+                                Presensi.kode_jam_kerja != None,
+                                Presensi.jam_in != None,
+                                Presensi.jam_out == None
                             ).all()
                             
                             target_niks = [r[0] for r in target_karyawans]
