@@ -75,7 +75,10 @@ def get_violations(
         # Note: calling scan_violations is safer as it shares logic
         
         try:
-            detected = scan_violations(date_scan=today, db=db)
+            detected_today = scan_violations(date_scan=today, db=db)
+            yesterday = today - timedelta(days=1)
+            detected_yesterday = scan_violations(date_scan=yesterday, db=db)
+            detected = detected_today + detected_yesterday
             
             # Simple deduplication already handled by scan_violations 'is_new' logic 
             # BUT scan_violations returns dicts, doesn't verify DB existence again if scan_violations didn't save.
