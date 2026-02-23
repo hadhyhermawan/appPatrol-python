@@ -349,6 +349,8 @@ class BarangDTO(BaseModel):
     foto_keluar: Optional[str]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+    petugas_penerima: Optional[str] = None
+    petugas_keluar: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -394,6 +396,11 @@ async def get_barang_list(
         result = []
         for item in data:
             dto = BarangDTO.from_orm(item)
+            if item.barang_masuk and item.barang_masuk[0].karyawan:
+                dto.petugas_penerima = item.barang_masuk[0].karyawan.nama_karyawan
+            if item.barang_keluar and item.barang_keluar[0].karyawan:
+                dto.petugas_keluar = item.barang_keluar[0].karyawan.nama_karyawan
+                
             if dto.image and not dto.image.startswith(('http', 'https')):
                 dto.image = f"{STORAGE_BASE_URL}{dto.image}"
             if dto.foto_keluar and not dto.foto_keluar.startswith(('http', 'https')):
