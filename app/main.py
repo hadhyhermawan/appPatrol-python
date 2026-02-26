@@ -9,7 +9,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 from app.database import get_db
 from app.models.models import Users
-from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy, notifications, reminder
+from app.routers import auth, auth_legacy, beranda_legacy, absensi_legacy, patroli_legacy, emergency_legacy, izin_legacy, logistik_legacy, task_legacy, berita_legacy, tracking_legacy, ops_legacy, tamu_legacy, barang_legacy, dashboard, monitoring, master, berita, security, utilities, payroll, chat_management, walkie_channel, general_setting, jam_kerja_dept, hari_libur, lembur, izin_absen, izin_sakit, izin_cuti, izin_dinas, employee_tracking, role_permission, statistik_legacy, surat_legacy, notifications, reminder, denda
 
 from fastapi.staticfiles import StaticFiles
 
@@ -119,6 +119,7 @@ app_fastapi.include_router(role_permission.router)
 app_fastapi.include_router(statistik_legacy.router)
 app_fastapi.include_router(surat_legacy.router) # Android Migration Surat
 app_fastapi.include_router(reminder.router)     # Reminder Settings CRUD
+app_fastapi.include_router(denda.router)        # Denda CRUD
 
 from app.routers import laporan
 app_fastapi.include_router(laporan.router) # Web Report Presensi
@@ -129,6 +130,16 @@ app_fastapi.include_router(safety_briefing_legacy.router) # Android Migration Sa
 
 from app.routers import verify_face_legacy
 app_fastapi.include_router(verify_face_legacy.router)
+
+from app.routers import driver_vehicle
+app_fastapi.include_router(driver_vehicle.router)
+
+from app.routers import driver_p2h
+app_fastapi.include_router(driver_p2h.router)
+
+from app.routers import driver_tasks
+app_fastapi.include_router(driver_tasks.router)
+app_fastapi.include_router(driver_tasks.router_android)
 
 from app.routers import terms
 app_fastapi.include_router(terms.router)

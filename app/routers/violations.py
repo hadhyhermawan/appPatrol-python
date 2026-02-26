@@ -1,9 +1,9 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, date, timedelta
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.models import (
     Violation, Karyawan, Presensi, PresensiJamkerja, Cabang,
     PatrolSchedules, PatrolSessions, DepartmentTaskSessions, Departemen, AppFraud,
@@ -46,8 +46,46 @@ router = APIRouter(
 UPLOAD_DIR = "/var/www/appPatrol/storage/app/public/violations"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+def background_sync_violations():
+    db = SessionLocal()
+    try:
+        today = date.today()
+        # scan today and yesterday
+        detected_today = scan_violations(date_scan=today, db=db)
+        yesterday = today - timedelta(days=1)
+        detected_yesterday = scan_violations(date_scan=yesterday, db=db)
+        
+        detected = detected_today + detected_yesterday
+        for d in detected:
+            timestamp_str = str(d['timestamp']).split(' ')[0]
+            exists = db.query(Violation).filter(
+                Violation.nik == d['nik'],
+                Violation.tanggal_pelanggaran == timestamp_str,
+                Violation.violation_type == d['violation_code']
+            ).first()
+            
+            if not exists:
+                new_v = Violation(
+                    nik=d['nik'],
+                    tanggal_pelanggaran=timestamp_str,
+                    jenis_pelanggaran=d['severity'],
+                    keterangan=d['description'],
+                    sanksi='',
+                    status='OPEN',
+                    source='SYSTEM',
+                    violation_type=d['violation_code']
+                )
+                db.add(new_v)
+        
+        db.commit()
+    except Exception as e:
+        print(f"Background auto-sync failed: {e}")
+    finally:
+        db.close()
+
 @router.get("")
 def get_violations(
+    background_tasks: BackgroundTasks,
     page: int = 1,
     per_page: int = 10,
     search: Optional[str] = None,
@@ -60,8 +98,7 @@ def get_violations(
 ):
     today = date.today()
     
-    # Auto-generate ABSENT violations for today if filter allows or includes today
-    # To be safe, we only auto-generate for today to avoid aggressive history filling
+    # Fire and forget sync if querying recent dates
     should_sync = False
     if not date_start and not date_end:
         should_sync = True
@@ -69,47 +106,7 @@ def get_violations(
         should_sync = True
         
     if should_sync:
-        # Re-use scan logic partially or just call scan_violations and filter
-        # Ideally we refactor scan_violations to a service function, but for now:
-        # We can implement a lightweight check here or call scan_violations(today, db)
-        # Note: calling scan_violations is safer as it shares logic
-        
-        try:
-            detected_today = scan_violations(date_scan=today, db=db)
-            yesterday = today - timedelta(days=1)
-            detected_yesterday = scan_violations(date_scan=yesterday, db=db)
-            detected = detected_today + detected_yesterday
-            
-            # Simple deduplication already handled by scan_violations 'is_new' logic 
-            # BUT scan_violations returns dicts, doesn't verify DB existence again if scan_violations didn't save.
-            # scan_violations currently DOES NOT save. It checks 'is_new' against DB then returns list.
-            
-            for d in detected:
-                # We want to auto-save ALL system-detected violations
-                # Double check existence to be sure (race condition)
-                exists = db.query(Violation).filter(
-                    Violation.nik == d['nik'],
-                    Violation.tanggal_pelanggaran == str(d['timestamp']).split(' ')[0],
-                    Violation.violation_type == d['violation_code']
-                ).first()
-                
-                if not exists:
-                    new_v = Violation(
-                        nik=d['nik'],
-                        tanggal_pelanggaran=str(d['timestamp']).split(' ')[0],
-                        jenis_pelanggaran=d['severity'],
-                        keterangan=d['description'],
-                        sanksi='',
-                        status='OPEN',
-                        source='SYSTEM',
-                        violation_type=d['violation_code']
-                    )
-                    db.add(new_v)
-            
-            db.commit()
-        except Exception as e:
-            print(f"Auto-sync failed: {e}")
-            # Don't block list fetching
+        background_tasks.add_task(background_sync_violations)
 
     query = db.query(Violation).join(Karyawan, Violation.nik == Karyawan.nik)
 

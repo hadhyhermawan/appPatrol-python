@@ -81,7 +81,7 @@ def get_notification_summary(db: Session = Depends(get_db)):
     total_ajuan_absen = notifikasi_izinabsen + notifikasi_izinsakit + notifikasi_izincuti + notifikasi_izindinas
 
     # 2. Device Lock
-    q_device = db.query(Karyawan).filter(Karyawan.lock_device_login == 1)
+    q_device = db.query(Karyawan).filter(Karyawan.lock_device_login == '1')
     if excluded_niks:
         q_device = q_device.filter(Karyawan.nik.notin_(excluded_niks))
     device_lock_count = q_device.count()
@@ -117,7 +117,7 @@ def get_notification_summary(db: Session = Depends(get_db)):
     force_close_count = q_force_close.count()
 
     # 7. Face Verify Fails
-    q_face_fail = db.query(SecurityReports).filter(SecurityReports.type == 'FACE_VERIFICATION_FAILED', SecurityReports.status_flag == 'pending')
+    q_face_fail = db.query(SecurityReports).filter(SecurityReports.type == 'FACE_LIVENESS_LOCK', SecurityReports.status_flag == 'pending')
     if excluded_niks:
         q_face_fail = q_face_fail.filter(SecurityReports.nik.notin_(excluded_niks))
     face_fail_count = q_face_fail.count()
@@ -216,7 +216,7 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
     # Device Logic
     q_device = db.query(Karyawan.nik, Karyawan.nama_karyawan, Cabang.nama_cabang)\
                  .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
-                 .filter(Karyawan.lock_device_login == 1)
+                 .filter(Karyawan.lock_device_login == '1')
     if excluded_niks:
         q_device = q_device.filter(Karyawan.nik.notin_(excluded_niks))
     
@@ -272,7 +272,7 @@ def get_security_alerts_detail(db: Session = Depends(get_db)):
     q_fv = db.query(SecurityReports.id, SecurityReports.nik, Karyawan.nama_karyawan, Cabang.nama_cabang, SecurityReports.created_at)\
              .join(Karyawan, SecurityReports.nik == Karyawan.nik)\
              .join(Cabang, Karyawan.kode_cabang == Cabang.kode_cabang)\
-             .filter(SecurityReports.type == 'FACE_VERIFICATION_FAILED', SecurityReports.status_flag == 'pending')\
+             .filter(SecurityReports.type == 'FACE_LIVENESS_LOCK', SecurityReports.status_flag == 'pending')\
              .order_by(SecurityReports.created_at.desc())
     if excluded_niks:
         q_fv = q_fv.filter(SecurityReports.nik.notin_(excluded_niks))

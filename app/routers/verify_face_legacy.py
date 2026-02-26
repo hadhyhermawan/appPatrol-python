@@ -50,9 +50,9 @@ async def verify_face(
             # If Verified: Clear Lock & Unlock Device
             if response.status_code == 200 and is_verified:
                 try:
-                    # 1. Delete Security Reports (Lock)
+                    # 1. Update status Security Reports jadi resolved (alih-alih dihapus)
                     db.execute(
-                        text("DELETE FROM security_reports WHERE type = 'FACE_LIVENESS_LOCK' AND nik = :nik"), 
+                        text("UPDATE security_reports SET status_flag = 'resolved' WHERE type = 'FACE_LIVENESS_LOCK' AND nik = :nik"), 
                         {"nik": nik}
                     )
                     

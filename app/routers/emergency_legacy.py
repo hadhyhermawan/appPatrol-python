@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
-from app.models.models import EmergencyAlerts, SecurityReports, Users, Karyawan, Cabang, KaryawanDevices
+from app.models.models import EmergencyAlerts, SecurityReports, Users, Karyawan, Cabang, KaryawanDevices, PengaturanUmum
 from app.sio import sio as sio_server
 from sqlalchemy import desc
 import firebase_admin
@@ -267,11 +267,39 @@ async def report_abuse(
     alert_title = "🚨 PERINGATAN KEAMANAN"
     alert_body = ""
 
-    if fail_count and fail_count > 5:
+    # Calculate actual accumulated fails by summing pending reports for this NIK
+    total_fails = fail_count
+    if type == 'FACE_LIVENESS_LOCK':
+        pending_reports = db.query(SecurityReports).filter(
+            SecurityReports.nik == used_nik,
+            SecurityReports.type == type,
+            SecurityReports.status_flag == 'pending'
+        ).all()
+        # Sum all fail_count values, and if it exceeds 5, we lock.
+        total_fails = sum([(r.fail_count or 0) for r in pending_reports])
+
+    # Fetch settings for face_block_limit
+    setting = db.query(PengaturanUmum).first()
+    limit_block = setting.face_block_limit if setting and setting.face_block_limit else 3
+    liveness_limit = setting.face_check_liveness_limit if setting and setting.face_check_liveness_limit else 3
+    is_block_enabled = setting.enable_face_block_system if setting else 1
+    
+    max_fails_allowed = limit_block * liveness_limit
+
+    if type == 'FACE_LIVENESS_LOCK' and total_fails >= max_fails_allowed and is_block_enabled == 1:
         blocked = True
         needs_escalation = True
         message = "Akun terkunci sementara karena aktivitas mencurigakan"
         alert_body = "Perangkat/Akun Personel {nama} dikunci oleh sistem akibat gagal verifikasi wajah berturut-turut di Area {cabang}."
+        
+        # Block the user login
+        karyawan_to_block = db.query(Karyawan).filter(Karyawan.nik == used_nik).first()
+        if karyawan_to_block:
+            # You can set status_aktif_karyawan = '0' or lock_device_login = '1'
+            # Let's set both to be safe/thorough, based on your system rules
+            karyawan_to_block.lock_device_login = '1'
+            # karyawan_to_block.status_aktif_karyawan = '0' # Uncomment if you want to completely disable the account
+            db.commit()
 
     elif type == 'APP_FORCE_CLOSE':
         # Don't block, but notify supervisor

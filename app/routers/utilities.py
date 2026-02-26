@@ -5,10 +5,11 @@ from app.database import get_db
 from app.models.models import Users, ModelHasRoles, Roles, Karyawan, Permissions, PermissionGroups, LoginLogs, Cabang, SecurityReports, Departemen
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import sys
 import traceback
 from app.core.permissions import CurrentUser, get_current_user, require_permission_dependency
+from app.core.security import get_password_hash
 
 router = APIRouter(
     prefix="/api/utilities",
@@ -30,10 +31,21 @@ class UserDTO(BaseModel):
     class Config:
         from_attributes = True
 
-@router.get("/users", response_model=List[UserDTO])
+class PaginationMeta(BaseModel):
+    total_items: int
+    total_pages: int
+    current_page: int
+    per_page: int
+
+class UserListResponse(BaseModel):
+    data: List[UserDTO]
+    meta: Optional[PaginationMeta] = None
+
+@router.get("/users", response_model=UserListResponse)
 async def get_users(
     search: Optional[str] = Query(None, description="Search by Name/Email"),
-    limit: Optional[int] = Query(100),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, le=1000),
     current_user: CurrentUser = Depends(require_permission_dependency("users.index")),
     db: Session = Depends(get_db)
 ):
@@ -48,7 +60,11 @@ async def get_users(
                 (Users.username.like(f"%{search}%"))
             )
             
-        data = query.order_by(desc(Users.created_at)).limit(limit).all()
+        total_items = query.count()
+        import math
+        total_pages = math.ceil(total_items / limit) if limit > 0 else 0
+            
+        data = query.order_by(desc(Users.created_at)).offset((page - 1) * limit).limit(limit).all()
         
         result = []
         for user in data:
@@ -74,8 +90,152 @@ async def get_users(
             
             result.append(dto)
             
-        return result
+        return UserListResponse(
+            data=result,
+            meta=PaginationMeta(
+                total_items=total_items,
+                total_pages=total_pages,
+                current_page=page,
+                per_page=limit
+            )
+        )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class CreateUserDTO(BaseModel):
+    name: str
+    username: str
+    email: str
+    password: str
+    role_id: Optional[int] = None
+
+@router.post("/users", response_model=UserDTO)
+async def create_user(
+    payload: CreateUserDTO,
+    current_user: CurrentUser = Depends(require_permission_dependency("users.create")),
+    db: Session = Depends(get_db)
+):
+    try:
+        # Check if username or email exists
+        if db.query(Users).filter((Users.username == payload.username) | (Users.email == payload.email)).first():
+            raise HTTPException(status_code=400, detail="Username or email already exists")
+
+        hashed_password = get_password_hash(payload.password)
+        
+        new_user = Users(
+            name=payload.name,
+            username=payload.username,
+            email=payload.email,
+            password=hashed_password,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        
+        db.add(new_user)
+        db.flush()
+
+        if payload.role_id:
+            db.execute(text("INSERT INTO model_has_roles (role_id, model_type, model_id) VALUES (:rid, 'App\\\\Models\\\\User', :uid)"), {"rid": payload.role_id, "uid": new_user.id})
+
+        db.commit()
+        db.refresh(new_user)
+        
+        dto = UserDTO.model_validate(new_user)
+        
+        # Get role name mapping back
+        if payload.role_id:
+            role = db.query(Roles).filter(Roles.id == payload.role_id).first()
+            if role:
+                dto.role = "Super Admin" if role.name == "super admin" else role.name.title()
+
+        return dto
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UpdateUserDTO(BaseModel):
+    name: str
+    username: str
+    email: str
+    password: Optional[str] = None
+    role_id: Optional[int] = None
+
+@router.put("/users/{id}", response_model=UserDTO)
+async def update_user(
+    id: int,
+    payload: UpdateUserDTO,
+    current_user: CurrentUser = Depends(require_permission_dependency("users.update")),
+    db: Session = Depends(get_db)
+):
+    try:
+        user = db.query(Users).filter(Users.id == id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        # Check duplicate
+        duplicate = db.query(Users).filter(
+            ((Users.username == payload.username) | (Users.email == payload.email)),
+            Users.id != id
+        ).first()
+        
+        if duplicate:
+            raise HTTPException(status_code=400, detail="Username or email already exists")
+            
+        user.name = payload.name
+        user.username = payload.username
+        user.email = payload.email
+        
+        if payload.password and len(payload.password) > 0:
+            user.password = get_password_hash(payload.password)
+            
+        user.updated_at = datetime.utcnow()
+        db.add(user)
+        
+        # Replace roles
+        db.execute(text("DELETE FROM model_has_roles WHERE model_id = :uid AND model_type LIKE '%User'"), {"uid": id})
+        if payload.role_id:
+            db.execute(text("INSERT INTO model_has_roles (role_id, model_type, model_id) VALUES (:rid, 'App\\\\Models\\\\User', :uid)"), {"rid": payload.role_id, "uid": id})
+
+        db.commit()
+        db.refresh(user)
+        
+        dto = UserDTO.model_validate(user)
+        if payload.role_id:
+            role = db.query(Roles).filter(Roles.id == payload.role_id).first()
+            if role:
+                dto.role = "Super Admin" if role.name == "super admin" else role.name.title()
+
+        return dto
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/users/{id}")
+async def delete_user(
+    id: int,
+    current_user: CurrentUser = Depends(require_permission_dependency("users.delete")),
+    db: Session = Depends(get_db)
+):
+    try:
+        user = db.query(Users).filter(Users.id == id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Delete role bindings
+        db.execute(text("DELETE FROM model_has_roles WHERE model_id = :uid AND model_type LIKE '%User'"), {"uid": id})
+        # Delete user
+        db.delete(user)
+        db.commit()
+        
+        return {"message": "User deleted successfully"}
+    except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==========================================
@@ -513,7 +673,10 @@ async def get_security_reports(
     nik_filter: Optional[str] = Query(None),
     kode_cabang: Optional[str] = Query(None),
     kode_dept: Optional[str] = Query(None),
-    limit: int = 20,
+    date_start: Optional[date] = Query(None),
+    date_end: Optional[date] = Query(None),
+    type_filter: Optional[str] = Query(None),
+    limit: int = 100,
     db: Session = Depends(get_db)
 ):
     try:
@@ -535,6 +698,7 @@ async def get_security_reports(
         if keyword:
             query = query.filter(
                 (SecurityReports.nik.like(f"%{keyword}%")) | 
+                (Karyawan.nama_karyawan.like(f"%{keyword}%")) |
                 (SecurityReports.type.like(f"%{keyword}%"))
             )
             
@@ -546,6 +710,15 @@ async def get_security_reports(
             
         if kode_dept:
             query = query.filter(Karyawan.kode_dept == kode_dept)
+            
+        if date_start:
+            query = query.filter(func.date(SecurityReports.created_at) >= date_start)
+            
+        if date_end:
+            query = query.filter(func.date(SecurityReports.created_at) <= date_end)
+            
+        if type_filter:
+            query = query.filter(SecurityReports.type == type_filter)
             
         query = query.order_by(desc(SecurityReports.created_at))
         

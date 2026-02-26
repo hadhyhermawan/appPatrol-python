@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from app.database import get_db
-from app.models.models import Karyawan, Departemen, Jabatan, Cabang, StatusKawin, Userkaryawan, PatrolPointMaster, Cuti, PresensiJamkerja, PatrolSchedules, DepartmentTaskPointMaster, SetJamKerjaByDay, SetJamKerjaByDate, PresensiJamkerjaBydateExtra, SetJamKerjaByDate, Users, KaryawanWajah
+from app.models.models import Karyawan, Departemen, Jabatan, Cabang, StatusKawin, Userkaryawan, PatrolPointMaster, Cuti, PresensiJamkerja, PatrolSchedules, DepartmentTaskPointMaster, SetJamKerjaByDay, SetJamKerjaByDate, PresensiJamkerjaBydateExtra, SetJamKerjaByDate, Users, KaryawanWajah, ModelHasRoles
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, validator
 from datetime import date, datetime, time
@@ -1106,6 +1106,7 @@ async def get_karyawan_list(
     dept_code: Optional[str] = None,
     cabang_code: Optional[str] = None,
     masa_anggota: Optional[str] = Query(None, description="aktif, expiring, expired"),
+    lock_device: Optional[str] = Query(None, description="0, 1, or all"),
     current_user: CurrentUser = Depends(require_permission_dependency("karyawan.index")),
     db: Session = Depends(get_db)
 ):
@@ -1173,6 +1174,9 @@ async def get_karyawan_list(
                 query = query.filter(sisa_hari_col.between(0, 30))
             elif masa_anggota == 'expired':
                 query = query.filter(sisa_hari_col < 0)
+
+        if lock_device and lock_device != 'all':
+            query = query.filter(Karyawan.lock_device_login == lock_device)
 
         # Count total
         total_items = query.count()
@@ -2025,6 +2029,14 @@ async def create_user_from_karyawan(nik: str, db: Session = Depends(get_db)):
             updated_at=datetime.now()
         )
         db.add(new_link)
+        
+        # Assign role 'karyawan' (id: 3)
+        new_role_link = ModelHasRoles(
+            role_id=3,
+            model_type='App\\Models\\User',
+            model_id=new_user.id
+        )
+        db.add(new_role_link)
         
         db.commit()
         return {"status": True, "message": f"User berhasil dibuat. Password default: {nik}"}

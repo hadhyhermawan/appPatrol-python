@@ -7,8 +7,8 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, date
 from fastapi import Query
-from sqlalchemy import func
-
+from fastapi import Query
+from sqlalchemy import func, or_
 router = APIRouter(
     prefix="/api/payroll",
     tags=["Payroll"]
@@ -133,24 +133,44 @@ class GajiPokokDTO(BaseModel):
     class Config:
         from_attributes = True
 
-@router.get("/gaji-pokok", response_model=List[GajiPokokDTO])
+class PaginationMeta(BaseModel):
+    total_items: int
+    total_pages: int
+    current_page: int
+    per_page: int
+
+class GajiPokokListResponse(BaseModel):
+    status: bool
+    data: List[GajiPokokDTO]
+    meta: Optional[PaginationMeta] = None
+
+@router.get("/gaji-pokok", response_model=GajiPokokListResponse)
 async def get_gaji_pokok(
     keyword: Optional[str] = Query(None),
     kode_cabang: Optional[str] = Query(None),
     kode_dept: Optional[str] = Query(None),
-    limit: int = 20,
+    page: int = Query(1, description="Page number"),
+    per_page: int = Query(20, description="Items per page"),
+    limit: Optional[int] = Query(None, description="Legacy limit override"),
     db: Session = Depends(get_db)
 ):
     query = db.query(KaryawanGajiPokok).join(Karyawan, KaryawanGajiPokok.nik == Karyawan.nik)
     
     if keyword:
-        query = query.filter(Karyawan.nama_karyawan.like(f"%{keyword}%"))
+        query = query.filter(or_(Karyawan.nama_karyawan.like(f"%{keyword}%"), Karyawan.nik.like(f"%{keyword}%")))
     if kode_cabang:
         query = query.filter(Karyawan.kode_cabang == kode_cabang)
     if kode_dept:
         query = query.filter(Karyawan.kode_dept == kode_dept)
         
-    data = query.order_by(desc(KaryawanGajiPokok.created_at)).limit(limit).all()
+    total_items = query.count()
+    
+    if limit is not None:
+        per_page = limit
+        
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    
+    data = query.order_by(desc(KaryawanGajiPokok.created_at)).offset((page - 1) * per_page).limit(per_page).all()
     
     result = []
     for item in data:
@@ -160,9 +180,18 @@ async def get_gaji_pokok(
         dto.kode_cabang = item.karyawan.kode_cabang if item.karyawan else None
         result.append(dto)
         
-    return result
+    return {
+        "status": True,
+        "data": result,
+        "meta": {
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "current_page": page,
+            "per_page": per_page
+        }
+    }
 
-@router.post("/gaji-pokok", response_model=GajiPokokDTO)
+@router.post("/gaji-pokok")
 async def create_gaji_pokok(payload: CreateGajiPokokDTO, db: Session = Depends(get_db)):
     try:
         # Code Generation Logic: G + YY + XXXX (4 digit sequence)
@@ -185,29 +214,47 @@ async def create_gaji_pokok(payload: CreateGajiPokokDTO, db: Session = Depends(g
         else:
             new_seq = 1
             
-        new_code = f"{prefix}{str(new_seq).zfill(4)}"
-        
-        new_item = KaryawanGajiPokok(
-            kode_gaji=new_code,
-            nik=payload.nik,
-            jumlah=payload.jumlah,
-            tanggal_berlaku=payload.tanggal_berlaku,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        )
-        db.add(new_item)
-        db.commit()
-        db.refresh(new_item)
-        
-        # Fetch related karyawan info for response
-        dto = GajiPokokDTO.model_validate(new_item)
-        karyawan = db.query(Karyawan).filter(Karyawan.nik == payload.nik).first()
-        if karyawan:
-            dto.nama_karyawan = karyawan.nama_karyawan
-            dto.kode_dept = karyawan.kode_dept
-            dto.kode_cabang = karyawan.kode_cabang
+        niks_to_process = []
+        if payload.nik == "ALL":
+            karyawans = db.query(Karyawan).filter(
+                or_(Karyawan.status_aktif_karyawan == '1', Karyawan.status_aktif_karyawan == 'y', Karyawan.status_aktif_karyawan == 'aktif')
+            ).all()
+            niks_to_process = [k.nik for k in karyawans]
+        else:
+            niks_to_process = [payload.nik]
+
+        if not niks_to_process:
+            raise HTTPException(status_code=400, detail="Tidak ada karyawan yang diproses")
+
+        inserted_items = []
+        for nik in niks_to_process:
+            new_code = f"{prefix}{str(new_seq).zfill(4)}"
             
-        return dto
+            new_item = KaryawanGajiPokok(
+                kode_gaji=new_code,
+                nik=nik,
+                jumlah=payload.jumlah,
+                tanggal_berlaku=payload.tanggal_berlaku,
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            db.add(new_item)
+            inserted_items.append(new_item)
+            new_seq += 1
+            
+        db.commit()
+        
+        if len(inserted_items) == 1:
+            db.refresh(inserted_items[0])
+            dto = GajiPokokDTO.model_validate(inserted_items[0])
+            karyawan = db.query(Karyawan).filter(Karyawan.nik == inserted_items[0].nik).first()
+            if karyawan:
+                dto.nama_karyawan = karyawan.nama_karyawan
+                dto.kode_dept = karyawan.kode_dept
+                dto.kode_cabang = karyawan.kode_cabang
+            return dto
+        else:
+            return {"message": f"Berhasil menyimpan {len(inserted_items)} data gaji pokok"}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -399,14 +446,14 @@ async def get_tunjangan_by_id(kode: str, db: Session):
     
     details_dto = []
     total = 0
-        for d in item.details:
-            detail_item = TunjanganDetailDTO(
-                kode_jenis_tunjangan=d.kode_jenis_tunjangan,
-                jumlah=d.jumlah,
-                jenis_tunjangan_nama="" if not d.jenis_tunjangan else d.jenis_tunjangan.jenis_tunjangan
-            )
-            details_dto.append(detail_item)
-            total += d.jumlah
+    for d in item.details:
+        detail_item = TunjanganDetailDTO(
+            kode_jenis_tunjangan=d.kode_jenis_tunjangan,
+            jumlah=d.jumlah,
+            jenis_tunjangan_nama="" if not d.jenis_tunjangan else d.jenis_tunjangan.jenis_tunjangan
+        )
+        details_dto.append(detail_item)
+        total += d.jumlah
     
     dto.details = details_dto
     dto.total_tunjangan = total
@@ -632,24 +679,39 @@ class BpjsTkDTO(BaseModel):
     class Config:
         from_attributes = True
 
-@router.get("/bpjs-tenagakerja", response_model=List[BpjsTkDTO])
+class BpjsTkListResponse(BaseModel):
+    status: bool
+    data: List[BpjsTkDTO]
+    meta: Optional[PaginationMeta] = None
+
+@router.get("/bpjs-tenagakerja", response_model=BpjsTkListResponse)
 async def get_bpjs_tenagakerja(
     keyword: Optional[str] = Query(None),
     kode_cabang: Optional[str] = Query(None),
     kode_dept: Optional[str] = Query(None),
-    limit: int = 20,
+    page: int = Query(1, description="Page number"),
+    per_page: int = Query(20, description="Items per page"),
+    limit: Optional[int] = Query(None, description="Legacy limit override"),
     db: Session = Depends(get_db)
 ):
     query = db.query(KaryawanBpjstenagakerja).join(Karyawan, KaryawanBpjstenagakerja.nik == Karyawan.nik)
     
     if keyword:
-        query = query.filter(Karyawan.nama_karyawan.like(f"%{keyword}%"))
+        query = query.filter(or_(Karyawan.nama_karyawan.like(f"%{keyword}%"), Karyawan.nik.like(f"%{keyword}%")))
     if kode_cabang:
         query = query.filter(Karyawan.kode_cabang == kode_cabang)
     if kode_dept:
         query = query.filter(Karyawan.kode_dept == kode_dept)
         
-    data = query.order_by(desc(KaryawanBpjstenagakerja.created_at)).limit(limit).all()
+    total_items = query.count()
+    
+    # Backward compatibility for old apps sending ?limit=50
+    if limit is not None:
+        per_page = limit
+        
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    
+    data = query.order_by(desc(KaryawanBpjstenagakerja.created_at)).offset((page - 1) * per_page).limit(per_page).all()
     
     result = []
     for item in data:
@@ -659,7 +721,16 @@ async def get_bpjs_tenagakerja(
         dto.kode_cabang = item.karyawan.kode_cabang if item.karyawan else None
         result.append(dto)
         
-    return result
+    return {
+        "status": True,
+        "data": result,
+        "meta": {
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "current_page": page,
+            "per_page": per_page
+        }
+    }
 
 @router.post("/bpjs-tenagakerja", response_model=BpjsTkDTO)
 async def create_bpjs_tenagakerja(payload: CreateBpjsTkDTO, db: Session = Depends(get_db)):

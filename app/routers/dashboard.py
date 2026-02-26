@@ -84,20 +84,55 @@ async def get_dashboard_stats(
     
     yesterday_hadir = rekap_yesterday.first().hadir or 0
     
-    # Top Cabang Performance
-    top_cabang = db.query(
-        Cabang.kode_cabang,
-        Cabang.nama_cabang,
-        func.count(Karyawan.nik).label('total_karyawan')
-    )\
-        .outerjoin(Karyawan, and_(
-            Karyawan.kode_cabang == Cabang.kode_cabang,
-            Karyawan.status_aktif_karyawan == '1'
-        ))\
-        .group_by(Cabang.kode_cabang, Cabang.nama_cabang)\
-        .order_by(desc('total_karyawan'))\
-        .limit(5)\
-        .all()
+    # Top Karyawan Performance
+    perf_month = target_date.month
+    perf_year = target_date.year
+    from sqlalchemy import extract
+    from app.models.models import PresensiJamkerja
+    
+    karyawans = db.query(Karyawan).filter(Karyawan.status_aktif_karyawan == '1').all()
+    nik_list = [k.nik for k in karyawans]
+    
+    presensi_counts = dict(db.query(Presensi.nik, func.count(Presensi.id))\
+        .filter(extract('month', Presensi.tanggal) == perf_month, extract('year', Presensi.tanggal) == perf_year, Presensi.status.in_(['H', 'h', 'HADIR', 'hadir']))\
+        .filter(Presensi.nik.in_(nik_list)).group_by(Presensi.nik).all())
+        
+    patrol_counts = dict(db.query(PatrolSessions.nik, func.count(PatrolSessions.id))\
+        .filter(extract('month', PatrolSessions.tanggal) == perf_month, extract('year', PatrolSessions.tanggal) == perf_year)\
+        .filter(PatrolSessions.nik.in_(nik_list)).group_by(PatrolSessions.nik).all())
+
+    terlambat_counts = dict(db.query(Presensi.nik, func.count(Presensi.id))\
+        .join(PresensiJamkerja, Presensi.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
+        .filter(extract('month', Presensi.tanggal) == perf_month, extract('year', Presensi.tanggal) == perf_year, Presensi.status.in_(['H', 'h', 'HADIR', 'hadir']))\
+        .filter(func.time(Presensi.jam_in) > PresensiJamkerja.jam_masuk)\
+        .filter(Presensi.nik.in_(nik_list)).group_by(Presensi.nik).all())
+        
+    karyawan_scores = []
+    for k in karyawans:
+        h = presensi_counts.get(k.nik, 0)
+        p = patrol_counts.get(k.nik, 0)
+        t = terlambat_counts.get(k.nik, 0)
+        total = h + p - t
+        if total > 0 or h > 0 or p > 0:
+            karyawan_scores.append({
+                "nama": k.nama_karyawan,
+                "hadir": h,
+                "patroli": p,
+                "terlambat": t,
+                "total": total
+            })
+            
+    karyawan_scores.sort(key=lambda x: x['total'], reverse=True)
+    top_5 = karyawan_scores[:5]
+    
+    top_karyawan_chart = {
+        "categories": [x["nama"] for x in top_5],
+        "series": [
+            {"name": "Hadir", "data": [x["hadir"] for x in top_5]},
+            {"name": "Patroli", "data": [x["patroli"] for x in top_5]},
+            {"name": "Terlambat", "data": [x["terlambat"] for x in top_5]},
+        ]
+    }
     
     # Patroli Aktif List
     patroli_list = db.query(
@@ -231,87 +266,54 @@ async def get_dashboard_stats(
         
     target_patroli_count = target_patroli_query.scalar() or 0
     
-    # 7. Recent Activities (Consolidated Feed)
-    recent_activities = []
+    # 7. Target Patroli Chart by Cabang
+    # 7. Target Patroli Chart by Cabang (Sudah vs Belum)
+    target_patroli_by_cabang = db.query(
+        Cabang.kode_cabang,
+        Cabang.nama_cabang,
+        func.count(PatrolSchedules.id).label('total')
+    )\
+    .outerjoin(PatrolSchedules, and_(PatrolSchedules.kode_cabang == Cabang.kode_cabang, PatrolSchedules.is_active == 1))\
+    .group_by(Cabang.kode_cabang, Cabang.nama_cabang)\
+    .order_by(desc('total'))\
+    .all()
     
-    # Fetch recent Presensi events (Last 10 updated)
-    recent_presensi = db.query(Presensi, Karyawan.nama_karyawan)\
-        .join(Karyawan, Presensi.nik == Karyawan.nik)\
-        .filter(func.date(Presensi.tanggal) == target_date)\
-        .order_by(desc(Presensi.updated_at))\
-        .limit(10)\
-        .all()
-        
-    for p, nama in recent_presensi:
-        # Check In Event
-        if p.jam_in:
-            recent_activities.append({
-                "type": "attendance",
-                "name": nama,
-                "action": "Absen Masuk",
-                "timestamp": p.jam_in, # DateTime
-                "icon": "UserCheck",
-                "color": "blue"
-            })
-            
-        # Check Out Event
-        if p.jam_out:
-            recent_activities.append({
-                "type": "attendance",
-                "name": nama,
-                "action": "Absen Pulang",
-                "timestamp": p.jam_out, # DateTime
-                "icon": "Clock",
-                "color": "purple"
-            })
-            
-    # Fetch recent Patrol events
-    recent_patrols = db.query(PatrolSessions, Karyawan.nama_karyawan)\
-        .join(Karyawan, PatrolSessions.nik == Karyawan.nik)\
-        .filter(PatrolSessions.tanggal == target_date)\
-        .order_by(desc(PatrolSessions.updated_at))\
-        .limit(10)\
-        .all()
-        
-    for p, nama in recent_patrols:
-        # Start Patrol
-        if p.jam_patrol:
-             # jam_patrol is Time, combine with date
-             dt_start = datetime.combine(p.tanggal, p.jam_patrol)
-             recent_activities.append({
-                 "type": "patrol",
-                 "name": nama,
-                 "action": "Memulai Patroli",
-                 "timestamp": dt_start,
-                 "icon": "Shield",
-                 "color": "green"
-             })
-        
-        # Finish Patrol
-        if p.status == 'complete':
-            # Use updated_at as completion time proxy
-             recent_activities.append({
-                 "type": "patrol",
-                 "name": nama,
-                 "action": "Menyelesaikan Patroli",
-                 "timestamp": p.updated_at,
-                 "icon": "Shield",
-                 "color": "green"
-             })
-             
-    # Sort by timestamp desc and take top 10
-    recent_activities.sort(key=lambda x: x['timestamp'], reverse=True)
-    final_activities = []
+    done_patroli_by_cabang = db.query(
+        Karyawan.kode_cabang,
+        func.count(PatrolSessions.id).label('done')
+    )\
+    .join(Karyawan, PatrolSessions.nik == Karyawan.nik)\
+    .filter(PatrolSessions.tanggal == target_date)\
+    .group_by(Karyawan.kode_cabang)\
+    .all()
+    done_map = {row.kode_cabang: row.done for row in done_patroli_by_cabang}
     
-    for a in recent_activities[:10]:
-        final_activities.append({
-            "type": a['type'],
-            "name": a['name'],
-            "action": a['action'],
-            "timestamp": a['timestamp'].isoformat() if a['timestamp'] else None,
-            "icon": a['icon'],
-            "color": a['color']
-        })
+    cat_cabang = []
+    sudah_data = []
+    belum_data = []
+    
+    for c in target_patroli_by_cabang:
+        if c.total > 0:
+            sudah = done_map.get(c.kode_cabang, 0)
+            belum = c.total - sudah
+            if belum < 0: belum = 0
+            cat_cabang.append(c.nama_cabang)
+            sudah_data.append(sudah)
+            belum_data.append(belum)
+
+    target_patroli_chart = {
+        "categories": cat_cabang,
+        "series": [
+            {
+                "name": "Sudah Dilakukan",
+                "data": sudah_data
+            },
+            {
+                "name": "Belum Dilakukan",
+                "data": belum_data
+            }
+        ]
+    }
     
     return {
         "stats": {
@@ -345,16 +347,7 @@ async def get_dashboard_stats(
             "barang_hari_ini": barang_count,
             "target_patroli": target_patroli_count
         },
-        "top_cabang": [
-            {
-                "kode_cabang": c.kode_cabang,
-                "nama_cabang": c.nama_cabang,
-                "total_karyawan": c.total_karyawan,
-                "trend": "up",
-                "change": 2.5
-            }
-            for c in top_cabang
-        ],
+        "top_karyawan_chart": top_karyawan_chart,
         "patroli_aktif_list": [
             {
                 "nama_karyawan": p[1],
@@ -384,7 +377,7 @@ async def get_dashboard_stats(
             }
             for t in tidak_hadir
         ],
-        "recent_activities": final_activities,
+        "target_patroli_chart": target_patroli_chart,
         "chart_data": chart_data,
         "tanggal": target_date.isoformat()
     }

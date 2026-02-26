@@ -91,6 +91,32 @@ async def get_jadwal_bulanan(
     
     presensi_map = {p.tanggal: p for p in presensi_records}
 
+    # 5.5 Fetch Izin
+    from app.models.models import PresensiIzinabsen, PresensiIzindinas, PresensiIzinsakit, PresensiIzincuti
+    from sqlalchemy import and_
+
+    izin_map = {}
+    
+    def populate_izin(records, status_code):
+        for r in records:
+            if str(r.status) != '1': continue
+            curr_izin = r.dari
+            while curr_izin <= r.sampai:
+                izin_map[curr_izin] = status_code
+                curr_izin += timedelta(days=1)
+                
+    izin_absens = db.query(PresensiIzinabsen).filter(and_(PresensiIzinabsen.nik == nik, PresensiIzinabsen.dari <= end_date, PresensiIzinabsen.sampai >= start_date)).all()
+    populate_izin(izin_absens, 'I')
+    
+    izin_sakits = db.query(PresensiIzinsakit).filter(and_(PresensiIzinsakit.nik == nik, PresensiIzinsakit.dari <= end_date, PresensiIzinsakit.sampai >= start_date)).all()
+    populate_izin(izin_sakits, 'S')
+    
+    izin_cutis = db.query(PresensiIzincuti).filter(and_(PresensiIzincuti.nik == nik, PresensiIzincuti.dari <= end_date, PresensiIzincuti.sampai >= start_date)).all()
+    populate_izin(izin_cutis, 'C')
+    
+    izin_dinas = db.query(PresensiIzindinas).filter(and_(PresensiIzindinas.nik == nik, PresensiIzindinas.dari <= end_date, PresensiIzindinas.sampai >= start_date)).all()
+    populate_izin(izin_dinas, 'DL')
+
     # 6. Generate Calendar Loop
     jadwal_full = []
     
@@ -98,6 +124,10 @@ async def get_jadwal_bulanan(
     days_map = {
         0: 'Senin', 1: 'Selasa', 2: 'Rabu', 3: 'Kamis', 4: 'Jumat', 5: 'Sabtu', 6: 'Minggu'
     }
+    
+    has_roster_this_month = len(roster_map) > 0
+    has_regular_day = len(regular_map) > 0
+    has_dept_day = len(dept_map) > 0
     
     curr = start_date
     while curr <= end_date:
@@ -128,11 +158,22 @@ async def get_jadwal_bulanan(
         elif curr in roster_map:
             final_kode = roster_map[curr]
             is_roster = True
+        elif has_roster_this_month:
+            # If they have a roster this month, and this day is NOT in the roster, it's a day off.
+            final_kode = None
+            is_roster = False
         elif day_name in regular_map:
             final_kode = regular_map[day_name]
             is_roster = False
+        elif has_regular_day:
+            # If they have a regular day config, and this day is NOT in it (like Saturday/Sunday), it's a day off.
+            final_kode = None
+            is_roster = False
         elif day_name in dept_map:
             final_kode = dept_map[day_name]
+            is_roster = False
+        elif has_dept_day:
+            final_kode = None
             is_roster = False
         else:
             final_kode = karyawan.kode_jadwal
@@ -154,7 +195,10 @@ async def get_jadwal_bulanan(
             item["jam_absen_masuk"] = str(p.jam_in) if p.jam_in else None
             item["jam_absen_pulang"] = str(p.jam_out) if p.jam_out else None
             item["status"] = p.status if p.status else "H"
-            
+        else:
+            if curr in izin_map:
+                item["status"] = izin_map[curr]
+                
         jadwal_full.append(item)
         curr += timedelta(days=1)
 

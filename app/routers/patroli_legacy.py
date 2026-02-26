@@ -506,8 +506,8 @@ async def patroli_absen(
     
     db.commit()
         
-    # Delete Security Report
-    db.query(SecurityReports).filter(SecurityReports.nik == nik, SecurityReports.type == 'FACE_LIVENESS_LOCK').delete()
+    # Update status Security Reports (bukan dihapus)
+    db.query(SecurityReports).filter(SecurityReports.nik == nik, SecurityReports.type == 'FACE_LIVENESS_LOCK').update({"status_flag": "resolved"})
     db.commit()
     
     foto_url = f"https://frontend.k3guard.com/api-py/storage/uploads/patroli/{subfolder}/{foto_name}"

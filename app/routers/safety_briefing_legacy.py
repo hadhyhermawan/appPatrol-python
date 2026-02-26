@@ -137,6 +137,13 @@ async def get_safety_briefing(
     for sb, nama in results:
         foto_url = f"https://frontend.k3guard.com/api-py/storage/{sb.foto}" if sb.foto else None
 
+        # Batasi nama maksimal 2 kata
+        nama_karyawan_truncated = nama
+        if nama:
+            words = nama.split()
+            if len(words) > 2:
+                nama_karyawan_truncated = f"{words[0]} {words[1]}..."
+
         # Cari nama shift dari presensi pada tanggal briefing tersebut
         tgl_briefing = sb.tanggal_jam.date() if sb.tanggal_jam else None
         nama_shift = None
@@ -159,7 +166,7 @@ async def get_safety_briefing(
             "foto": sb.foto,
             "foto_url": foto_url,
             "tanggal_jam": str(sb.tanggal_jam),
-            "nama_karyawan": nama,
+            "nama_karyawan": nama_karyawan_truncated,
             "kode_cabang": kode_cabang,
             "nama_shift": nama_shift or "Shift"   # fallback jika tidak ada data presensi
         })
@@ -318,6 +325,13 @@ async def store_safety_briefing(
     
     foto_url = f"https://frontend.k3guard.com/api-py/storage/{new_sb.foto}" if new_sb.foto else None
 
+    # Batasi nama maksimal 2 kata
+    nama_karyawan_truncated = karyawan.nama_karyawan
+    if nama_karyawan_truncated:
+        words = nama_karyawan_truncated.split()
+        if len(words) > 2:
+            nama_karyawan_truncated = f"{words[0]} {words[1]}..."
+
     return {
         "status": True,
         "message": "Safety briefing berhasil dicatat",
@@ -330,7 +344,7 @@ async def store_safety_briefing(
             "tanggal_jam": str(new_sb.tanggal_jam),
             "created_at": str(new_sb.created_at) if new_sb.created_at else None,
             "updated_at": str(new_sb.updated_at) if new_sb.updated_at else None,
-            "nama_karyawan": karyawan.nama_karyawan,
+            "nama_karyawan": nama_karyawan_truncated,
             "kode_cabang": kode_cabang
         }
     }

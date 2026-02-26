@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from sqlalchemy import text, func
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_nik, get_current_user_data, CurrentUser
@@ -24,13 +25,18 @@ os.makedirs(STORAGE_PATH, exist_ok=True)
 WIB = pytz.timezone('Asia/Jakarta')
 
 def determine_jam_kerja_hari_ini(db: Session, nik: str, today: date, now_wib: datetime):
-    from app.models.models import SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerja, Karyawan, PresensiJamkerjaBydept, PresensiJamkerjaBydateExtra
+    # Dynamic import to avoid circular dependency
+    from app.models.models import PresensiJamkerjaByDeptDetail, SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerjaBydept, PresensiJamkerjaBydateExtra
+    from sqlalchemy import desc, extract
     
     jam_kerja_obj = None
-    presensi = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
+    presensi = None
+    
+    # Check if there is an active ongoing shift
+    presensi_aktif = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.jam_out == None).first()
     
     # Logic Lintas Hari: Check if yesterday's shift is still ongoing
-    if not presensi:
+    if not presensi_aktif:
         yesterday = today - timedelta(days=1)
         presensi_yesterday = db.query(Presensi).filter(
             Presensi.nik == nik, 
@@ -39,58 +45,102 @@ def determine_jam_kerja_hari_ini(db: Session, nik: str, today: date, now_wib: da
             Presensi.jam_out == None
         ).first()
         if presensi_yesterday:
-            presensi = presensi_yesterday
+            presensi_aktif = presensi_yesterday
 
-    # Determine Jam Kerja
-    if presensi:
-        # User already clocked in, use the recorded schedule
-        jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == presensi.kode_jam_kerja).first()
-    else:
-        # Not clocked in yet, find today's schedule
-        
-        # 0. By Date Extra (Highest Priority Override)
-        by_date_extra = db.query(PresensiJamkerjaBydateExtra).filter(PresensiJamkerjaBydateExtra.nik == nik, PresensiJamkerjaBydateExtra.tanggal == today).first()
-        if by_date_extra:
-             jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_date_extra.kode_jam_kerja).first()
+    # If there is an active shift, lock onto it
+    if presensi_aktif:
+        return db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == presensi_aktif.kode_jam_kerja).first(), presensi_aktif
 
-        # 1. By Date
-        if not jam_kerja_obj:
-            by_date = db.query(SetJamKerjaByDate).filter(SetJamKerjaByDate.nik == nik, SetJamKerjaByDate.tanggal == today).first()
-            if by_date:
-                jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_date.kode_jam_kerja).first()
-                
-        if not jam_kerja_obj:
-            # 2. By Day
-            days_map = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-            day_name = days_map[now_wib.weekday()]
-            
+    # We don't have an active shift. Let's find the best schedule.
+    # Contexts to prevent falling back incorrectly:
+    has_roster_this_month = db.query(SetJamKerjaByDate).filter(
+        SetJamKerjaByDate.nik == nik,
+        extract('month', SetJamKerjaByDate.tanggal) == today.month,
+        extract('year', SetJamKerjaByDate.tanggal) == today.year
+    ).count() > 0
+
+    has_regular_day = db.query(SetJamKerjaByDay).filter(SetJamKerjaByDay.nik == nik).count() > 0
+
+    karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
+    has_dept_day = False
+    dept_header = None
+    if karyawan and karyawan.kode_dept:
+        dept_header = db.query(PresensiJamkerjaBydept).filter(
+            PresensiJamkerjaBydept.kode_dept == karyawan.kode_dept,
+            PresensiJamkerjaBydept.kode_cabang == karyawan.kode_cabang
+        ).first()
+        if dept_header:
+            has_dept_day = db.query(PresensiJamkerjaByDeptDetail).filter(
+                PresensiJamkerjaByDeptDetail.kode_jk_dept == dept_header.kode_jk_dept
+            ).count() > 0
+
+    days_map = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+    day_name = days_map[now_wib.weekday()]
+
+    possible_shifts = []
+    
+    # Priority 0: Extra Date
+    extra_dates = db.query(PresensiJamkerjaBydateExtra).filter(PresensiJamkerjaBydateExtra.nik == nik, PresensiJamkerjaBydateExtra.tanggal == today).order_by(desc(PresensiJamkerjaBydateExtra.id)).all()
+    for ex in extra_dates:
+        possible_shifts.append({'kode': ex.kode_jam_kerja, 'source': 'extra'})
+
+    # Priority 1: Roster
+    if not has_roster_this_month:
+        # Fallback to Priority 2: Regular Day
+        if not has_regular_day:
+            # Fallback to Priority 3: Dept Day
+            if not has_dept_day:
+                # Priority 4: Karyawan Default
+                if karyawan and karyawan.kode_jadwal:
+                    possible_shifts.append({'kode': karyawan.kode_jadwal, 'source': 'default'})
+            else:
+                # Get Dept today
+                dept_detail = db.query(PresensiJamkerjaByDeptDetail).filter(
+                    PresensiJamkerjaByDeptDetail.kode_jk_dept == dept_header.kode_jk_dept,
+                    PresensiJamkerjaByDeptDetail.hari == day_name
+                ).first()
+                if dept_detail and dept_detail.kode_jam_kerja:
+                    possible_shifts.append({'kode': dept_detail.kode_jam_kerja, 'source': 'dept'})
+        else:
+            # Get Regular today
             by_day = db.query(SetJamKerjaByDay).filter(SetJamKerjaByDay.nik == nik, SetJamKerjaByDay.hari == day_name).first()
             if by_day:
-                jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == by_day.kode_jam_kerja).first()
-            else:
-                karyawan = db.query(Karyawan).filter(Karyawan.nik == nik).first()
-                if karyawan and karyawan.kode_dept:
-                    try:
-                        from app.models.models import PresensiJamkerjaByDeptDetail
-                        dept_header = db.query(PresensiJamkerjaBydept).filter(
-                            PresensiJamkerjaBydept.kode_dept == karyawan.kode_dept,
-                            PresensiJamkerjaBydept.kode_cabang == karyawan.kode_cabang
-                        ).first()
-                        if dept_header:
-                            dept_detail = db.query(PresensiJamkerjaByDeptDetail).filter(
-                                PresensiJamkerjaByDeptDetail.kode_jk_dept == dept_header.kode_jk_dept,
-                                PresensiJamkerjaByDeptDetail.hari == day_name
-                            ).first()
-                            if dept_detail and dept_detail.kode_jam_kerja:
-                                jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == dept_detail.kode_jam_kerja).first()
-                    except Exception as e:
-                        pass
+                 possible_shifts.append({'kode': by_day.kode_jam_kerja, 'source': 'byday'})
+    else:
+        # User is on roster this month.
+        by_date = db.query(SetJamKerjaByDate).filter(SetJamKerjaByDate.nik == nik, SetJamKerjaByDate.tanggal == today).first()
+        if by_date:
+            possible_shifts.append({'kode': by_date.kode_jam_kerja, 'source': 'roster'})
 
-                # 4. Default User
-                if not jam_kerja_obj and karyawan and karyawan.kode_jadwal:
-                     jam_kerja_obj = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == karyawan.kode_jadwal).first()
+    # Fetch JamKerja objects and sort possible shifts chronologically by jam_masuk
+    shifts_with_jk = []
+    for s in possible_shifts:
+        jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == s['kode']).first()
+        if jk:
+            shifts_with_jk.append((s, jk))
+            
+    shifts_with_jk.sort(key=lambda x: x[1].jam_masuk)
 
-    return jam_kerja_obj, presensi
+    # Now, find the first schedule they HAVE NOT FINISHED
+    finished_presensis = []
+    
+    for s, jk in shifts_with_jk:
+        kode = s['kode']
+        
+        # Check if they finished this one
+        finished_p = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.kode_jam_kerja == kode, Presensi.jam_out != None).first()
+        if not finished_p:
+            # Found one!
+            return jk, None
+        else:
+            finished_presensis.append((kode, finished_p))
+            
+    if finished_presensis:
+        last_kode, last_p = finished_presensis[-1]
+        jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == last_kode).first()
+        return jk, last_p
+        
+    return None, None
 
 @router.get("/hariini")
 async def get_presensi_hari_ini(
@@ -241,13 +291,6 @@ async def absen(
 
     # 2. Logic Absen Masuk
     if is_masuk:
-        # Check existing
-        existing = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
-        if existing:
-            if existing.status and existing.status.lower() not in ['h', 'a']:
-                raise HTTPException(status_code=400, detail=f"Anda tidak dapat absen, status hari ini: {existing.status.upper()}")
-            raise HTTPException(status_code=400, detail="Anda sudah absen masuk hari ini.")
-        
         # TENTUKAN SCHEDULE TERBAIK (JIKA KOSONG/NS DARI FRONTEND)
         jk = None
         used_kode_jam_kerja = kode_jam_kerja if kode_jam_kerja else 'NS'
@@ -273,6 +316,13 @@ async def absen(
         
         if not jk:
             jk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == used_kode_jam_kerja).first()
+
+        # Check existing
+        existing = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.kode_jam_kerja == used_kode_jam_kerja).first()
+        if existing:
+            if existing.status and existing.status.lower() not in ['h', 'a']:
+                raise HTTPException(status_code=400, detail=f"Anda tidak dapat absen, status hari ini: {existing.status.upper()}")
+            raise HTTPException(status_code=400, detail="Anda sudah absen masuk hari ini.")
             
         # Logic Kunci Jam Kerja (Bounds) untuk Masuk
         karyawan_check = db.query(Karyawan).filter(Karyawan.nik == nik).first()
@@ -290,7 +340,7 @@ async def absen(
                 
         lintas_hari_val = 0
         # Check char '1' in DB
-        if str(jk.lintashari) == '1':
+        if str(jk.lintashari) in ['1', 'Y', 'y']:
              lintas_hari_val = 1
              
         new_presensi = Presensi(
@@ -313,7 +363,8 @@ async def absen(
     # 3. Logic Absen Pulang
     elif is_pulang:
         # Find presensi to clock out
-        presensi = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).first()
+        # We should prioritize one that does NOT have jam_out yet, in case of multiple shifts
+        presensi = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today, Presensi.jam_out == None).first()
         
         # Lintas Hari Logic: Check yesterday if user clocked in yesterday on a night shift
         if not presensi:
@@ -327,6 +378,10 @@ async def absen(
             
             if presensi_yesterday:
                 presensi = presensi_yesterday
+
+        # If still no presensi without jam_out, let's grab the latest one for today just to show the "already clocked out" error
+        if not presensi:
+            presensi = db.query(Presensi).filter(Presensi.nik == nik, Presensi.tanggal == today).order_by(desc(Presensi.id)).first()
         
         if not presensi:
              raise HTTPException(status_code=400, detail="Belum absen masuk, tidak bisa absen pulang.")
@@ -345,7 +400,7 @@ async def absen(
                 jadwal_pulang_str = f"{presensi.tanggal.strftime('%Y-%m-%d')} {jk.jam_pulang.strftime('%H:%M:%S')}"
                 jadwal_pulang = datetime.strptime(jadwal_pulang_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=WIB)
                 
-                if str(jk.lintashari) == '1':
+                if str(jk.lintashari) in ['1', 'Y', 'y']:
                     jadwal_pulang = jadwal_pulang + timedelta(days=1)
                     
                 batas_akhir_pulang = jadwal_pulang + timedelta(hours=batas_absen_pulang)
