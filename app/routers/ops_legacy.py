@@ -22,9 +22,9 @@ router = APIRouter(
     tags=["Ops Legacy"],
 )
 
-STORAGE_BREIFING = "/var/www/appPatrol/storage/app/public/briefing"
-STORAGE_TURLALIN = "/var/www/appPatrol/storage/app/public/turlalin"
-STORAGE_SURAT = "/var/www/appPatrol/storage/app/public/surat"
+STORAGE_BREIFING = "/var/www/appPatrol-python/storage/briefing"
+STORAGE_TURLALIN = "/var/www/appPatrol-python/storage/turlalin"
+STORAGE_SURAT = "/var/www/appPatrol-python/storage/surat"
 
 os.makedirs(STORAGE_BREIFING, exist_ok=True)
 os.makedirs(STORAGE_TURLALIN, exist_ok=True)
@@ -103,7 +103,7 @@ async def list_turlalin(
 
     kode_cabang = karyawan.kode_cabang
 
-    items = db.query(Turlalin).join(Karyawan, Turlalin.nik == Karyawan.nik)\
+    items = db.query(Turlalin).join(Karyawan, Turlalin.nik_masuk == Karyawan.nik)\
         .filter(Karyawan.kode_cabang == kode_cabang)\
         .order_by(Turlalin.jam_keluar.isnot(None), desc(Turlalin.jam_masuk)).limit(limit).all()
 
@@ -126,10 +126,10 @@ async def list_turlalin(
             "foto_keluar": foto_keluar_url,
             "jam_masuk": str(i.jam_masuk),
             "jam_keluar": str(i.jam_keluar) if i.jam_keluar else None,
-            "nik": i.nik,
+            "nik": getattr(i, 'nik_masuk', None),
             "nik_keluar": i.nik_keluar,
-            "nama_satpam_masuk": i.karyawan.nama_karyawan if i.karyawan else None,
-            "nama_satpam_keluar": i.karyawan_.nama_karyawan if i.karyawan_ else None,
+            "nama_petugas_masuk": i.karyawan.nama_karyawan if i.karyawan else None,
+            "nama_petugas_keluar": i.karyawan_.nama_karyawan if i.karyawan_ else None,
             "created_at": str(i.created_at) if hasattr(i, 'created_at') and i.created_at else None,
             "updated_at": str(i.created_at) if hasattr(i, 'updated_at') and i.updated_at else None
         })
@@ -170,7 +170,7 @@ async def store_turlalin_masuk(
     jam_masuk_wib = datetime.now(WIB).replace(tzinfo=None)
         
     new_data = Turlalin(
-        nik=user.nik,
+        nik_masuk=user.nik,
         nomor_polisi=nomor_polisi,
         keterangan=keterangan,
         jam_masuk=jam_masuk_wib,
@@ -193,8 +193,10 @@ async def store_turlalin_masuk(
             "foto_keluar": None,
             "jam_masuk": str(new_data.jam_masuk),
             "jam_keluar": None,
-            "nik": getattr(new_data, 'nik', None),
+            "nik": getattr(new_data, 'nik_masuk', None),
             "nik_keluar": None,
+            "nama_petugas_masuk": new_data.karyawan.nama_karyawan if hasattr(new_data, 'karyawan') and new_data.karyawan else None,
+            "nama_petugas_keluar": None,
             "created_at": str(new_data.created_at) if hasattr(new_data, 'created_at') and new_data.created_at else None,
             "updated_at": str(new_data.created_at) if hasattr(new_data, 'updated_at') and new_data.updated_at else None
         }
@@ -254,10 +256,10 @@ async def store_turlalin_keluar(
             "foto_keluar": foto_keluar_url,
             "jam_masuk": str(data.jam_masuk),
             "jam_keluar": str(data.jam_keluar) if data.jam_keluar else None,
-            "nik": data.nik,
+            "nik": getattr(data, 'nik_masuk', None),
             "nik_keluar": data.nik_keluar,
-            "nama_satpam_masuk": data.karyawan.nama_karyawan if data.karyawan else None,
-            "nama_satpam_keluar": data.karyawan_.nama_karyawan if hasattr(data, 'karyawan_') and data.karyawan_ else None,
+            "nama_petugas_masuk": data.karyawan.nama_karyawan if data.karyawan else None,
+            "nama_petugas_keluar": data.karyawan_.nama_karyawan if hasattr(data, 'karyawan_') and data.karyawan_ else None,
             "created_at": str(data.created_at) if hasattr(data, 'created_at') and data.created_at else None,
             "updated_at": str(data.created_at) if hasattr(data, 'updated_at') and data.updated_at else None
         }
@@ -384,6 +386,14 @@ async def _get_profile_data(user, db):
     if not full_foto_url and u.foto:
         full_foto_url = f"{base_url}users/{u.foto}"
 
+    id_vendor = None
+    nama_vendor = None
+    if user.vendor_id:
+        id_vendor = user.vendor_id
+        vendor_row = db.execute(text("SELECT nama_vendor FROM vendors WHERE id = :vid"), {"vid": user.vendor_id}).fetchone()
+        if vendor_row:
+            nama_vendor = vendor_row[0]
+
     data_pengaturan = {
         "id": u.id,
         "nik": user.nik,
@@ -398,6 +408,8 @@ async def _get_profile_data(user, db):
         "departemen": judul_departemen,
         "foto": full_foto_url,
         "foto_filename": foto_user if karyawan else u.foto, # For reference
+        "id_vendor": id_vendor,
+        "nama_vendor": nama_vendor,
         "created_at": str(u.created_at) if u.created_at else "",
         "updated_at": str(u.updated_at) if u.updated_at else ""
     }
@@ -433,10 +445,10 @@ async def update_foto_profil(
 
         filename = f"foto_{uuid.uuid4().hex[:8]}.jpg"
         if karyawan:
-            save_dir = f"/var/www/appPatrol/storage/app/public/karyawan"
+            save_dir = f"/var/www/appPatrol-python/storage/karyawan"
             rel_path = f"karyawan/{filename}"
         else:
-            save_dir = f"/var/www/appPatrol/storage/app/public/users"
+            save_dir = f"/var/www/appPatrol-python/storage/users"
             rel_path = f"users/{filename}"
 
         os.makedirs(save_dir, exist_ok=True)
@@ -466,6 +478,40 @@ async def update_foto_profil(
             "nama_karyawan": nama,
             "foto": foto_url
         }
+    }
+
+@router.patch("/pengaturan/password")
+async def update_password_android(
+    password_lama: str = Form(...),
+    password_baru: str = Form(...),
+    password_baru_confirmation: str = Form(...),
+    user: CurrentUser = Depends(get_current_user_data),
+    db: Session = Depends(get_db)
+):
+    """Ganti Password dari Aplikasi Android"""
+    if password_baru != password_baru_confirmation:
+        return {"status": False, "message": "Konfirmasi password baru tidak cocok"}
+
+    if len(password_baru) < 6:
+        return {"status": False, "message": "Password baru minimal 6 karakter"}
+
+    u = db.query(Users).filter(Users.id == user.id).first()
+    if not u:
+        raise HTTPException(401, "User tidak ditemukan")
+
+    from app.core.security import verify_password, get_password_hash
+    
+    # 1. Verifikasi Password Lama
+    if not verify_password(password_lama, u.password):
+        return {"status": False, "message": "Password lama tidak sesuai"}
+
+    # 2. Update Password Baru
+    u.password = get_password_hash(password_baru)
+    db.commit()
+
+    return {
+        "status": True,
+        "message": "Password berhasil diperbarui"
     }
 
 @router.get("/app/version-policy")
