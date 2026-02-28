@@ -13,7 +13,7 @@ import io
 
 from app.database import get_db
 from app.routers.auth_legacy import get_current_user_data, CurrentUser
-from app.models.models import Karyawan, Tamu, Presensi, PresensiJamkerja, SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerjaByDeptDetail
+from app.models.models import Karyawan, Tamu, Presensi, PresensiJamkerja, SetJamKerjaByDate, SetJamKerjaByDay, PresensiJamkerjaByDeptDetail, EmployeeSchedule
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -24,7 +24,7 @@ router = APIRouter(
     tags=["Tamu Legacy"],
 )
 
-STORAGE_TAMU = "/var/www/appPatrol/storage/app/public/tamu"
+STORAGE_TAMU = "/var/www/appPatrol-python/storage/tamu"
 os.makedirs(STORAGE_TAMU, exist_ok=True)
 
 # Timezone WIB (UTC+7)
@@ -69,6 +69,19 @@ def get_jam_kerja_karyawan(db: Session, nik: str, kode_cabang: str, kode_dept: s
         pass
     except Exception as e:
         logger.error(f"Error querying PresensiJamkerjaBydateExtra: {e}")
+
+    # 0.5 Check By Team Bulk Schedule
+    try:
+        bs = db.query(EmployeeSchedule).filter(
+            EmployeeSchedule.nik == nik,
+            EmployeeSchedule.tanggal == tanggal
+        ).first()
+        if bs:
+            jk_bulk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == bs.kode_jam_kerja).first()
+            if jk_bulk:
+                return jk_bulk
+    except Exception as e:
+        logger.error(f"Error querying EmployeeSchedule: {e}")
 
     # 1. Start Check By Date (Tukar Shift / Rotasi)
     jk_by_date = db.query(PresensiJamkerja)\
@@ -169,7 +182,9 @@ def check_jam_kerja_status(db: Session, karyawan: Karyawan):
 
 def save_compressed_image(upload_file: UploadFile, prefix: str):
     filename = f"{prefix}_{uuid.uuid4().hex[:6]}.jpg"
+    filename_thumb = f"{prefix}_{uuid.uuid4().hex[:6]}_thumb.jpg"
     path = os.path.join(STORAGE_TAMU, filename)
+    path_thumb = os.path.join(STORAGE_TAMU, filename_thumb)
     
     try:
         # Read image
@@ -185,19 +200,33 @@ def save_compressed_image(upload_file: UploadFile, prefix: str):
         if image.width > max_width:
             ratio = max_width / image.width
             new_height = int(image.height * ratio)
-            image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+            image_large = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_large = image
             
         # Save compressed
-        image.save(path, "JPEG", quality=70)
+        image_large.save(path, "JPEG", quality=70)
+
+        # Thumbnail
+        thumb_width = 300
+        if image.width > thumb_width:
+            ratio = thumb_width / image.width
+            new_height = int(image.height * ratio)
+            image_thumb = image.resize((thumb_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_thumb = image
+            
+        image_thumb.save(path_thumb, "JPEG", quality=60)
+
         upload_file.file.seek(0) # Reset pointer just in case
         
-        return f"tamu/{filename}"
+        return f"tamu/{filename}", f"tamu/{filename_thumb}"
     except Exception as e:
         logger.error(f"Failed to process image: {e}")
         # Fallback raw save if pillow fails
         with open(path, "wb") as buffer:
              buffer.write(image_content)
-        return f"tamu/{filename}"
+        return f"tamu/{filename}", None
 
 
 # --- ENDPOINTS ---
@@ -233,11 +262,11 @@ async def get_tamu_riwayat(
 
     if kode_cabang:
         base_q = db.query(Tamu)\
-            .join(KaryawanSatpam, Tamu.nik_satpam == KaryawanSatpam.nik)\
+            .join(KaryawanSatpam, Tamu.nik_petugas_masuk == KaryawanSatpam.nik)\
             .filter(KaryawanSatpam.kode_cabang == kode_cabang)
     else:
         # Fallback: tampilkan tamu yg dicatat oleh karyawan ini saja
-        base_q = db.query(Tamu).filter(Tamu.nik_satpam == nik)
+        base_q = db.query(Tamu).filter(Tamu.nik_petugas_masuk == nik)
 
     # 3. Filter: tamu 30 hari terakhir ATAU yang belum pulang (jam_keluar = NULL)
     base_q = base_q.filter(
@@ -291,8 +320,10 @@ async def get_tamu_riwayat(
             "no_pol": t.no_pol,
             "jam_masuk": str(t.jam_masuk) if t.jam_masuk else None,
             "jam_keluar": str(t.jam_keluar) if t.jam_keluar else None,
-            "foto_masuk": _build_foto_url(t.foto),
-            "foto_keluar": _build_foto_url(t.foto_keluar),
+            "foto_masuk": _build_foto_url(t.foto.replace('.jpg', '_thumb.jpg')) if t.foto else None,
+            "foto_masuk_original": _build_foto_url(t.foto),
+            "foto_keluar": _build_foto_url(t.foto_keluar.replace('.jpg', '_thumb.jpg')) if t.foto_keluar else None,
+            "foto_keluar_original": _build_foto_url(t.foto_keluar),
             "status": "KELUAR" if t.jam_keluar else "MASUK",
             "nik_masuk": t.nik_satpam,
             "nama_satpam_masuk": nama_satpam_masuk,
@@ -348,10 +379,10 @@ async def store_tamu(
     if no_pol and no_pol.strip() == "":
         no_pol = None
 
-    # 2. Handle Image
     foto_path = None
+    foto_thumb_path = None
     if foto:
-        foto_path = save_compressed_image(foto, "tamu_masuk")
+        foto_path, foto_thumb_path = save_compressed_image(foto, "tamu_masuk")
         
     # 3. Save DB — gunakan raw SQL agar jam_masuk tersimpan dalam WIB (bukan UTC)
     # Enterprise Optimization Step 3.1: Force Server Time instead of Android Time
@@ -361,14 +392,14 @@ async def store_tamu(
 
     from sqlalchemy import text as sql_text
     result = db.execute(sql_text("""
-        INSERT INTO tamu (nik_satpam, nama, alamat, jenis_id, no_telp, perusahaan,
+        INSERT INTO tamu (nik_petugas_masuk, nama, alamat, jenis_id, no_telp, perusahaan,
                          bertemu_dengan, dengan_perjanjian, keperluan,
                          jenis_kendaraan, no_pol, jam_masuk, foto)
-        VALUES (:nik_satpam, :nama, :alamat, :jenis_id, :no_telp, :perusahaan,
+        VALUES (:nik_petugas_masuk, :nama, :alamat, :jenis_id, :no_telp, :perusahaan,
                 :bertemu_dengan, :dengan_perjanjian, :keperluan,
                 :jenis_kendaraan, :no_pol, :jam_masuk, :foto)
     """), {
-        "nik_satpam": user.nik,
+        "nik_petugas_masuk": user.nik,
         "nama": nama,
         "alamat": alamat,
         "jenis_id": jenis_id,
@@ -388,16 +419,31 @@ async def store_tamu(
     # Ambil data yang baru disimpan
     new_tamu = db.query(Tamu).filter(Tamu.id_tamu == new_id).first()
 
-    
     # Format Response URL
     base_url = "https://frontend.k3guard.com/api-py/storage/"
+    foto_url = None
+    foto_url_original = None
     if new_tamu.foto:
-        new_tamu.foto = f"{base_url}{new_tamu.foto}"
+        foto_url = f"{base_url}{foto_thumb_path}" if foto_thumb_path else f"{base_url}{new_tamu.foto}"
+        foto_url_original = f"{base_url}{new_tamu.foto}"
+        new_tamu.foto = foto_url # Optional mutating DB object representation
     
+    resp_data = {
+        "id_tamu": new_tamu.id_tamu,
+        "nama": new_tamu.nama,
+        "jam_masuk": str(new_tamu.jam_masuk) if new_tamu.jam_masuk else None,
+        "jam_keluar": None,
+        "foto_masuk": foto_url,
+        "foto_masuk_original": foto_url_original,
+        "foto_keluar": None,
+        "foto_keluar_original": None,
+        "status": "MASUK"
+    }
+
     return {
         "status": True, 
         "message": "Tamu Berhasil Disimpan", 
-        "data": new_tamu
+        "data": resp_data
     }
 
 
@@ -431,7 +477,7 @@ async def tamu_pulang(
         raise HTTPException(404, "Tamu tidak ditemukan")
 
     # 3. Handle Image
-    foto_keluar_path = save_compressed_image(foto_keluar, "tamu_keluar")
+    foto_keluar_path, foto_keluar_thumb_path = save_compressed_image(foto_keluar, "tamu_keluar")
 
     # 4. Tentukan jam_keluar 
     # Enterprise Optimization Step 3.1: Force Server Time instead of Android Time
@@ -445,7 +491,7 @@ async def tamu_pulang(
     db.execute(sql_text("""
         UPDATE tamu 
         SET jam_keluar = :jam_keluar,
-            nik_satpam_keluar = :nik,
+            nik_petugas_keluar = :nik,
             foto_keluar = :foto
         WHERE id_tamu = :id_tamu
     """), {
@@ -468,8 +514,10 @@ async def tamu_pulang(
             "nama": tamu.nama,
             "jam_masuk": str(tamu.jam_masuk) if tamu.jam_masuk else None,
             "jam_keluar": jam_keluar_wib,
-            "foto_masuk": f"{base_url}{tamu.foto}" if tamu.foto else None,
-            "foto_keluar": f"{base_url}{foto_keluar_path}" if foto_keluar_path else None,
+            "foto_masuk": f"{base_url}{tamu.foto.replace('.jpg', '_thumb.jpg')}" if tamu.foto else None,
+            "foto_masuk_original": f"{base_url}{tamu.foto}" if tamu.foto else None,
+            "foto_keluar": f"{base_url}{foto_keluar_thumb_path}" if foto_keluar_thumb_path else None,
+            "foto_keluar_original": f"{base_url}{foto_keluar_path}" if foto_keluar_path else None,
             "status": "KELUAR"
         }
     }

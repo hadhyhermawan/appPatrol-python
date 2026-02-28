@@ -14,6 +14,8 @@ import os
 import uuid
 import random
 from typing import Optional, List
+from PIL import Image
+import io
 
 router = APIRouter(
     prefix="/api/android",
@@ -30,9 +32,9 @@ def get_jam_kerja_karyawan(nik, kode_cabang, kode_dept, db: Session):
     today = date.today()
     namahari = get_nama_hari(today)
 
-    # 0. By DATE EXTRA (Lembur / Double Shift) — Prioritas tertinggi
+    # 0.5 By Team Bulk Schedule
     try:
-        from app.models.models import PresensiJamkerjaBydateExtra
+        from app.models.models import PresensiJamkerjaBydateExtra, EmployeeSchedule
         jk_extra = db.query(PresensiJamkerja)\
             .join(PresensiJamkerjaBydateExtra, PresensiJamkerjaBydateExtra.kode_jam_kerja == PresensiJamkerja.kode_jam_kerja)\
             .filter(PresensiJamkerjaBydateExtra.nik == nik)\
@@ -40,6 +42,15 @@ def get_jam_kerja_karyawan(nik, kode_cabang, kode_dept, db: Session):
             .first()
         if jk_extra:
             return jk_extra
+            
+        bs = db.query(EmployeeSchedule).filter(
+            EmployeeSchedule.nik == nik,
+            EmployeeSchedule.tanggal == today
+        ).first()
+        if bs:
+            jk_bulk = db.query(PresensiJamkerja).filter(PresensiJamkerja.kode_jam_kerja == bs.kode_jam_kerja).first()
+            if jk_bulk:
+                return jk_bulk
     except Exception:
         pass
 
@@ -105,28 +116,56 @@ def check_jam_kerja(karyawan, db: Session):
         
     return {"status": True}
 
-def save_upload_surat(file_obj: UploadFile, kode_cabang: str, subfolder_name: str) -> str:
-    # uploads/$kodeCabang/$subfolder_name/filename.jpg
-    # In python we usually map storage path.
-    # PHP: Storage::disk('public')->put...
-    # Path: storage/app/public/uploads/KODE_CABANG/suratmasuk/...
-    
-    base_dir = f"/var/www/appPatrol/storage/app/public/uploads/{kode_cabang}/{subfolder_name}"
+def save_upload_surat(file_obj: UploadFile, kode_cabang: str, subfolder_name: str) -> tuple:
+    base_dir = f"/var/www/appPatrol-python/storage/uploads/{kode_cabang}/{subfolder_name}"
     os.makedirs(base_dir, exist_ok=True)
     
-    # Filename like PHP: time()_context_random.jpg
-    # context is 'suratmasuk' etc
-    safe_name = f"{int(datetime.timestamp(datetime.now()))}_{subfolder_name}_{uuid.uuid4().hex[:6]}.jpg"
+    unique_hex = uuid.uuid4().hex[:6]
+    safe_name = f"{int(datetime.timestamp(datetime.now()))}_{subfolder_name}_{unique_hex}.jpg"
+    safe_name_thumb = f"{int(datetime.timestamp(datetime.now()))}_{subfolder_name}_{unique_hex}_thumb.jpg"
     target_path = os.path.join(base_dir, safe_name)
+    target_path_thumb = os.path.join(base_dir, safe_name_thumb)
     
     try:
-        with open(target_path, "wb") as buffer:
-            shutil.copyfileobj(file_obj.file, buffer)
-    except Exception as e:
-        print(f"Error saving image: {e}")
-        return None
+        # Read image
+        image_content = file_obj.file.read()
+        image = Image.open(io.BytesIO(image_content))
         
-    return f"uploads/{kode_cabang}/{subfolder_name}/{safe_name}"
+        # Convert to RGB if needed
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+            
+        # Resize: Max width 1400, keep aspect ratio
+        max_width = 1400
+        if image.width > max_width:
+            ratio = max_width / image.width
+            new_height = int(image.height * ratio)
+            image_large = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_large = image
+            
+        # Save compressed
+        image_large.save(target_path, "JPEG", quality=70)
+
+        # Thumbnail
+        thumb_width = 300
+        if image.width > thumb_width:
+            ratio = thumb_width / image.width
+            new_height = int(image.height * ratio)
+            image_thumb = image.resize((thumb_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_thumb = image
+            
+        image_thumb.save(target_path_thumb, "JPEG", quality=60)
+
+        file_obj.file.seek(0)
+        
+        return f"uploads/{kode_cabang}/{subfolder_name}/{safe_name}", f"uploads/{kode_cabang}/{subfolder_name}/{safe_name_thumb}"
+    except Exception as e:
+        print(f"Error saving image with PIL: {e}")
+        with open(target_path, "wb") as buffer:
+             buffer.write(image_content)
+        return f"uploads/{kode_cabang}/{subfolder_name}/{safe_name}", None
 
 # ===============================================
 # SURAT MASUK
@@ -151,9 +190,18 @@ async def surat_masuk(
     now = datetime.now()
     last_month = now - timedelta(days=30)
 
-    q = db.query(SuratMasuk, Karyawan.nama_karyawan.label("nama_satpam"))\
-        .outerjoin(Karyawan, SuratMasuk.nik_satpam == Karyawan.nik)\
-        .filter(Karyawan.kode_cabang == kode_cabang)\
+    from sqlalchemy.orm import aliased
+    Satpam = aliased(Karyawan)
+    Pengantar = aliased(Karyawan)
+
+    q = db.query(
+        SuratMasuk, 
+        Satpam.nama_karyawan.label("nama_petugas_penerima"),
+        Pengantar.nama_karyawan.label("nama_petugas_pengantar")
+    )\
+        .outerjoin(Satpam, SuratMasuk.nik_petugas == Satpam.nik)\
+        .outerjoin(Pengantar, SuratMasuk.nik_satpam_pengantar == Pengantar.nik)\
+        .filter(Satpam.kode_cabang == kode_cabang)\
         .filter(or_(
             and_(SuratMasuk.tanggal_surat >= last_month, SuratMasuk.tanggal_surat <= now),
             SuratMasuk.tanggal_diterima == None
@@ -162,11 +210,16 @@ async def surat_masuk(
 
     results = q.all()
     data = []
-    for sm, nama_satpam in results:
-        foto_url = f"https://frontend.k3guard.com/api-py/storage/{sm.foto}" if sm.foto else None
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
+    for sm, n_penerima, n_pengantar in results:
+        foto_url = f"{base_url}{sm.foto.replace('.jpg', '_thumb.jpg')}" if sm.foto else None
+        foto_url_original = f"{base_url}{sm.foto}" if sm.foto else None
+        
         sm_dict = {c.name: getattr(sm, c.name) for c in sm.__table__.columns}
-        sm_dict['nama_karyawan'] = nama_satpam
+        sm_dict['nama_petugas_penerima'] = n_penerima
+        sm_dict['nama_petugas_pengantar'] = n_pengantar
         sm_dict['foto_url'] = foto_url
+        sm_dict['foto_url_original'] = foto_url_original
         data.append(sm_dict)
 
     return {
@@ -201,8 +254,9 @@ async def tambah_surat_masuk(
     nomor = f"SM{datetime.now().strftime('%Y%m%d')}{random.randint(100, 999)}"
     
     foto_path = None
+    foto_thumb_path = None
     if foto:
-        foto_path = save_upload_surat(foto, kode_cabang, 'suratmasuk')
+        foto_path, foto_thumb_path = save_upload_surat(foto, kode_cabang, 'suratmasuk')
         
     new_sm = SuratMasuk(
         nomor_surat=nomor,
@@ -220,7 +274,8 @@ async def tambah_surat_masuk(
     db.refresh(new_sm)
 
     base_url = "https://frontend.k3guard.com/api-py/storage/"
-    foto_url = f"{base_url}{new_sm.foto}" if new_sm.foto else None
+    foto_url = f"{base_url}{foto_thumb_path}" if foto_thumb_path else (f"{base_url}{new_sm.foto}" if new_sm.foto else None)
+    foto_url_original = f"{base_url}{new_sm.foto}" if new_sm.foto else None
 
     return {
         "status": True,
@@ -234,14 +289,15 @@ async def tambah_surat_masuk(
             "perihal": new_sm.perihal,
             "foto": new_sm.foto,
             "foto_url": foto_url,
+            "foto_url_original": foto_url_original,
             "nik_satpam": new_sm.nik_satpam,
             "nik_satpam_pengantar": new_sm.nik_satpam_pengantar,
             "status_surat": new_sm.status_surat,
             "tanggal_update": str(new_sm.tanggal_update) if new_sm.tanggal_update else None,
             "status_penerimaan": getattr(new_sm, 'status_penerimaan', None),
             "tanggal_diterima": None,
-            "nama_satpam": karyawan.nama_karyawan,
-            "nama_pengantar": None,
+            "nama_petugas_penerima": karyawan.nama_karyawan,
+            "nama_petugas_pengantar": None,
             "nama_penerima": None,
             "no_penerima": None
         }
@@ -268,8 +324,9 @@ async def update_surat_masuk(
     if not sm: raise HTTPException(404, "Surat Masuk not found")
     
     foto_path = None
+    foto_thumb_path = None
     if foto_penerima:
-        foto_path = save_upload_surat(foto_penerima, karyawan.kode_cabang, 'suratditerima')
+        foto_path, foto_thumb_path = save_upload_surat(foto_penerima, karyawan.kode_cabang, 'suratditerima')
         
     sm.status_surat = 'SELESAI'
     sm.status_penerimaan = 'DITERIMA'
@@ -298,9 +355,11 @@ async def update_surat_masuk(
             "tujuan_surat": sm.tujuan_surat,
             "perihal": sm.perihal,
             "foto": sm.foto,
-            "foto_url": foto_url,
+            "foto_url": f"{base_url}{sm.foto.replace('.jpg', '_thumb.jpg')}" if sm.foto else None,
+            "foto_url_original": f"{base_url}{sm.foto}" if sm.foto else None,
             "foto_penerima": getattr(sm, 'foto_penerima', None),
-            "foto_penerima_url": foto_penerima_url,
+            "foto_penerima_url": f"{base_url}{foto_thumb_path}" if foto_thumb_path else foto_penerima_url,
+            "foto_penerima_url_original": foto_penerima_url,
             "nik_satpam": sm.nik_satpam,
             "nik_satpam_pengantar": sm.nik_satpam_pengantar,
             "status_surat": sm.status_surat,
@@ -345,8 +404,8 @@ async def surat_keluar(
         Satpam.nama_karyawan.label("nama_satpam"),
         Pengantar.nama_karyawan.label("nama_pengantar")
     )\
-        .outerjoin(Satpam, SuratKeluar.nik_satpam == Satpam.nik)\
-        .outerjoin(Pengantar, SuratKeluar.nik_satpam_pengantar == Pengantar.nik)\
+        .outerjoin(Satpam, SuratKeluar.nik_petugas == Satpam.nik)\
+        .outerjoin(Pengantar, SuratKeluar.nik_petugas_pengantar == Pengantar.nik)\
         .filter(Satpam.kode_cabang == kode_cabang)\
         .filter(or_(
             and_(SuratKeluar.tanggal_surat >= last_month, SuratKeluar.tanggal_surat <= now),
@@ -356,12 +415,15 @@ async def surat_keluar(
 
     results = q.all()
     data = []
+    base_url = "https://frontend.k3guard.com/api-py/storage/"
     for sk, n_satpam, n_pengantar in results:
-        foto_url = f"https://frontend.k3guard.com/api-py/storage/{sk.foto}" if sk.foto else None
+        foto_url = f"{base_url}{sk.foto.replace('.jpg', '_thumb.jpg')}" if sk.foto else None
+        foto_url_original = f"{base_url}{sk.foto}" if sk.foto else None
         sk_dict = {c.name: getattr(sk, c.name) for c in sk.__table__.columns}
         sk_dict['nama_satpam'] = n_satpam
         sk_dict['nama_pengantar'] = n_pengantar
         sk_dict['foto_url'] = foto_url
+        sk_dict['foto_url_original'] = foto_url_original
         data.append(sk_dict)
 
     return {
@@ -388,8 +450,9 @@ async def tambah_surat_keluar(
     nomor = f"SK{datetime.now().strftime('%Y%m%d')}{random.randint(100, 999)}"
     
     foto_path = None
+    foto_thumb_path = None
     if foto:
-        foto_path = save_upload_surat(foto, karyawan.kode_cabang, 'suratkeluar')
+        foto_path, foto_thumb_path = save_upload_surat(foto, karyawan.kode_cabang, 'suratkeluar')
         
     new_sk = SuratKeluar(
         nomor_surat=nomor,
@@ -418,7 +481,8 @@ async def tambah_surat_keluar(
             "tujuan_surat": new_sk.tujuan_surat,
             "perihal": new_sk.perihal,
             "foto": new_sk.foto,
-            "foto_url": foto_url,
+            "foto_url": f"{base_url}{foto_thumb_path}" if foto_thumb_path else (f"{base_url}{new_sk.foto}" if new_sk.foto else None),
+            "foto_url_original": f"{base_url}{new_sk.foto}" if new_sk.foto else None,
             "foto_penerima": None,
             "nik_satpam": new_sk.nik_satpam,
             "nik_satpam_pengantar": None,
@@ -454,12 +518,9 @@ async def update_surat_keluar(
     if not sk: raise HTTPException(404, "Surat Keluar not found")
     
     foto_path = None
+    foto_thumb_path = None
     if foto_penerima:
-        # PHP uses 'suratkeluar-penerima' as context string which likely becomes subfolder?
-        # storeCompressedDocument(file, "uploads/$kodeCabang/suratkeluar", 'suratkeluar-penerima')
-        # Wait, storeCompressedDocument 2nd arg is folder. 3rd arg is context (prefix).
-        # My clean mapping: folder = suratkeluar
-        foto_path = save_upload_surat(foto_penerima, karyawan.kode_cabang, 'suratkeluar')
+        foto_path, foto_thumb_path = save_upload_surat(foto_penerima, karyawan.kode_cabang, 'suratkeluar')
         
     sk.status_surat = 'SELESAI'
     sk.status_penerimaan = 'DITERIMA'
@@ -487,9 +548,11 @@ async def update_surat_keluar(
             "tujuan_surat": sk.tujuan_surat,
             "perihal": sk.perihal,
             "foto": sk.foto,
-            "foto_url": foto_url,
+            "foto_url": f"{base_url}{sk.foto.replace('.jpg', '_thumb.jpg')}" if sk.foto else None,
+            "foto_url_original": f"{base_url}{sk.foto}" if sk.foto else None,
             "foto_penerima": getattr(sk, 'foto_penerima', None),
-            "foto_penerima_url": foto_penerima_url,
+            "foto_penerima_url": f"{base_url}{foto_thumb_path}" if foto_thumb_path else foto_penerima_url,
+            "foto_penerima_url_original": foto_penerima_url,
             "nik_satpam": sk.nik_satpam,
             "nik_satpam_pengantar": sk.nik_satpam_pengantar,
             "nama_satpam": karyawan.nama_karyawan,
