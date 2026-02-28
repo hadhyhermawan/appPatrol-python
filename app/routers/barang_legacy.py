@@ -26,7 +26,7 @@ router = APIRouter(
     tags=["Barang Legacy"],
 )
 
-STORAGE_BARANG = "/var/www/appPatrol/storage/app/public/barang"
+STORAGE_BARANG = "/var/www/appPatrol-python/storage/barang"
 os.makedirs(STORAGE_BARANG, exist_ok=True)
 
 # Timezone WIB (UTC+7)
@@ -133,7 +133,9 @@ def check_jam_kerja_status(db: Session, karyawan: Karyawan):
 
 def save_compressed_image(upload_file: UploadFile, prefix: str):
     filename = f"{prefix}_{uuid.uuid4().hex[:6]}.jpg"
+    filename_thumb = f"{prefix}_{uuid.uuid4().hex[:6]}_thumb.jpg"
     path = os.path.join(STORAGE_BARANG, filename)
+    path_thumb = os.path.join(STORAGE_BARANG, filename_thumb)
     
     try:
         image_content = upload_file.file.read()
@@ -142,21 +144,36 @@ def save_compressed_image(upload_file: UploadFile, prefix: str):
         if image.mode in ("RGBA", "P"):
             image = image.convert("RGB")
             
+        # 1. Save original but compressed
         max_width = 1400
         if image.width > max_width:
             ratio = max_width / image.width
             new_height = int(image.height * ratio)
-            image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
-            
-        image.save(path, "JPEG", quality=70)
+            image_large = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_large = image
+
+        image_large.save(path, "JPEG", quality=70)
+
+        # 2. Save thumbnail
+        thumb_width = 300
+        if image.width > thumb_width:
+            ratio = thumb_width / image.width
+            new_height = int(image.height * ratio)
+            image_thumb = image.resize((thumb_width, new_height), Image.Resampling.LANCZOS)
+        else:
+            image_thumb = image
+
+        image_thumb.save(path_thumb, "JPEG", quality=60)
+        
         upload_file.file.seek(0)
         
-        return f"barang/{filename}"
+        return f"barang/{filename}", f"barang/{filename_thumb}"
     except Exception as e:
         logger.error(f"Failed to process image: {e}")
         with open(path, "wb") as buffer:
              buffer.write(image_content)
-        return f"barang/{filename}"
+        return f"barang/{filename}", None
 
 def _build_foto_url(path: str) -> Optional[str]:
     if not path:
@@ -248,8 +265,10 @@ async def list_barang(
             "untuk": r['untuk'],
             "tgl_jam_masuk": str(r['tgl_jam_masuk']) if r['tgl_jam_masuk'] else None,
             "tgl_jam_ambil": str(r['tgl_jam_ambil']) if r['tgl_jam_ambil'] else None,
-            "foto_masuk": foto_masuk,
-            "foto_keluar": foto_keluar,
+            "foto_masuk": _build_foto_url(r['foto_masuk'].replace('.jpg', '_thumb.jpg')) if r['foto_masuk'] else None, # Kirim thumbnail
+            "foto_masuk_original": foto_masuk,
+            "foto_keluar": _build_foto_url(r['foto_keluar'].replace('.jpg', '_thumb.jpg')) if r['foto_keluar'] else None, # Kirim thumbnail
+            "foto_keluar_original": foto_keluar,
             "nik_satpam": r['nik_satpam'],
             "nama_satpam": r['nama_satpam'],
             "nik_penyerah": r['nik_penyerah'],
@@ -284,7 +303,7 @@ async def store_barang(
         raise HTTPException(status_code=403, detail=shift_check["message"])
 
     # 2. Save Image
-    image_path = save_compressed_image(image, "barang") # e.g. barang_xxxx.jpg inside storage/barang/
+    image_path, image_thumb_path = save_compressed_image(image, "barang") # e.g. barang_xxxx.jpg inside storage/barang/
     
     # 3. Insert Master Barang
     new_barang = Barang(
@@ -322,8 +341,10 @@ async def store_barang(
             "untuk": new_barang.untuk,
             "tgl_jam_masuk": str(bm.tgl_jam_masuk),
             "tgl_jam_ambil": None,
-            "foto_masuk": foto_masuk_url,
+            "foto_masuk": _build_foto_url(image_thumb_path) if image_thumb_path else foto_masuk_url,
+            "foto_masuk_original": foto_masuk_url,
             "foto_keluar": None,
+            "foto_keluar_original": None,
             "nik_satpam": user.nik,
             "nama_satpam": karyawan.nama_karyawan,
             "nik_penyerah": None,
@@ -357,7 +378,7 @@ async def barang_keluar(
         raise HTTPException(404, "Barang tidak ditemukan")
         
     # 3. Save Image
-    foto_keluar_path = save_compressed_image(foto_keluar, f"keluar_{id_barang}")
+    foto_keluar_path, foto_keluar_thumb_path = save_compressed_image(foto_keluar, f"keluar_{id_barang}")
     
     # 4. Update Barang (Foto Keluar)
     barang.foto_keluar = foto_keluar_path
@@ -387,8 +408,10 @@ async def barang_keluar(
             "untuk": barang.untuk,
             "tgl_jam_masuk": None,
             "tgl_jam_ambil": str(bk.tgl_jam_keluar),
-            "foto_masuk": foto_masuk_url,
-            "foto_keluar": foto_keluar_url,
+            "foto_masuk": _build_foto_url(barang.image.replace('.jpg', '_thumb.jpg')) if barang.image else foto_masuk_url,
+            "foto_masuk_original": foto_masuk_url,
+            "foto_keluar": _build_foto_url(foto_keluar_thumb_path) if foto_keluar_thumb_path else foto_keluar_url,
+            "foto_keluar_original": foto_keluar_url,
             "nik_satpam": None,
             "nama_satpam": None,
             "nik_penyerah": user.nik,
